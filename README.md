@@ -8,8 +8,9 @@ Arabic + English + mixed speech. RTL/LTR from the first screen. Built to the ALI
 principles: the LLM is never the security boundary, retrieved content is data (not instructions),
 providers are replaceable, and every external side effect is approved and audited.
 
-**This repository currently contains the specification and the build prompts. No application code
-has been written yet.**
+**Status: Phase 1 (foundation) is implemented and verified. Phases 2-15 are not started.**
+Meetings, transcription, analysis, search and integrations do not exist yet; the running app
+reports them as `not_implemented` / `not_configured` rather than faking them.
 
 ---
 
@@ -29,6 +30,40 @@ Follow-up (إيميل / Calendar) لكن **لا يرسل أي شيء إلا بم
 (`NOT_IMPLEMENTED` / `NOT_CONFIGURED`) ولا تظهر نجاحاً وهمياً.
 
 ---
+
+## Quickstart (development)
+
+```bash
+# 1. PostgreSQL 16 with pg_trgm, unaccent and pgvector must be reachable
+cp .env.example .env          # set DATABASE_URL and TEST_DATABASE_URL
+
+npm install
+npm run db:migrate            # applies migrations, then verifies the extensions
+npm run db:seed               # optional dev workspace, owner + member
+
+npm run dev:api               # http://127.0.0.1:4000
+npm run dev:web               # http://127.0.0.1:5173
+npm run dev:worker            # drains the job queue (no handlers registered yet)
+
+npm run verify                # typecheck + architecture boundaries + 62 tests
+npm run test:e2e              # browser smoke test (needs api + web running)
+```
+
+Health and honesty endpoints: `GET /health`, `GET /ready` (database + extensions),
+`GET /api/v1/system/capabilities` (what is real, what is not).
+
+## Repository layout
+
+```
+apps/api            Express API: auth, workspaces, audit, system
+apps/worker         background job runner (DB-backed queue)
+apps/web            React + Vite client (ar/en, RTL/LTR)
+packages/core       domain types, errors, Arabic/English text normalization — no I/O
+packages/db         schema, SQL migrations, repositories (the only place SQL lives)
+packages/policy     deterministic RBAC
+packages/providers  provider interfaces; unconfigured providers throw NOT_CONFIGURED
+packages/observability  structured logging with secret redaction
+```
 
 ## Documents
 

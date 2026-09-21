@@ -1,0 +1,49 @@
+{
+  "name": "alia-meetings",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "verify": "npm run typecheck && npm run lint:boundaries && npm run test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint:boundaries": "node scripts/check-boundaries.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "tsx packages/db/src/cli/migrate.ts",
+    "db:extensions": "tsx packages/db/src/cli/extensions.ts",
+    "db:seed": "tsx packages/db/src/cli/seed.ts",
+    "dev:api": "tsx watch apps/api/src/index.ts",
+    "dev:worker": "tsx watch apps/worker/src/index.ts",
+    "dev:web": "vite --config apps/web/vite.config.ts",
+    "build:web": "vite build --config apps/web/vite.config.ts",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/supertest": "^6.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.24.1"
+  }
+}

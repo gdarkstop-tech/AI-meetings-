@@ -127,4 +127,5 @@ acceptable, a fabricated success is not.
 | Phase | Date | Verified by | Result | Notes / outstanding |
 |---|---|---|---|---|
 | 0 — Audit, risks, plan | 2026-09-21 | Claude Code (self-audit); awaiting your review | Delivered: `docs/PHASE-0-AUDIT.md`, `docs/RISKS.md`, `docs/PLAN.md` | Blockers B1–B4 in `RISKS.md`; decisions D1–D9 in `PLAN.md`. No application code written. |
-| 1 | | | | not started |
+| 1 — Foundation | 2026-09-21 | Claude Code (self-verified); awaiting your review | `npm run verify` green: typecheck + boundary checks + 62 tests. Browser E2E green. | In place: monorepo, migrations (pg_trgm/unaccent/vector), auth + sessions + CSRF + rate limits, RBAC, workspace isolation tests, append-only audit with hash chain, job queue, i18n/RTL shell, secret-redacting logs, CI workflow. Deferred: ESLint/Prettier, shared-store rate limiting, server-side message localization, CI run on GitHub not yet observed. |
+| 2 | | | | not started |
