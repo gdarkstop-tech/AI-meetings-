@@ -1,3 +1,5 @@
+import { normalizeForSearch } from '../text/normalize.js';
+
 /**
  * Relative date resolution for action items ("tomorrow", "next Tuesday",
  * "بكرة", "الخميس الجاي").
@@ -12,11 +14,27 @@ export interface ResolvedDue {
   interpretation: string | null;
 }
 
-const WEEKDAYS: Record<string, number> = {
-  sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
-  'الأحد': 0, 'الاحد': 0, 'الإثنين': 1, 'الاثنين': 1, 'الثلاثاء': 2, 'الأربعاء': 3,
-  'الاربعاء': 3, 'الخميس': 4, 'الجمعة': 5, 'السبت': 6,
-};
+/**
+ * Weekday names in both scripts. Arabic keys are stored in their normalized
+ * form (see normalizeForSearch) because JavaScript's \b word boundary is
+ * ASCII-only and does not work for Arabic text.
+ */
+const WEEKDAYS: Array<{ match: string; weekday: number; arabic: boolean }> = [
+  { match: 'sunday', weekday: 0, arabic: false },
+  { match: 'monday', weekday: 1, arabic: false },
+  { match: 'tuesday', weekday: 2, arabic: false },
+  { match: 'wednesday', weekday: 3, arabic: false },
+  { match: 'thursday', weekday: 4, arabic: false },
+  { match: 'friday', weekday: 5, arabic: false },
+  { match: 'saturday', weekday: 6, arabic: false },
+  { match: 'الاحد', weekday: 0, arabic: true },
+  { match: 'الاثنين', weekday: 1, arabic: true },
+  { match: 'الثلاثاء', weekday: 2, arabic: true },
+  { match: 'الاربعاء', weekday: 3, arabic: true },
+  { match: 'الخميس', weekday: 4, arabic: true },
+  { match: 'الجمعه', weekday: 5, arabic: true },
+  { match: 'السبت', weekday: 6, arabic: true },
+];
 
 const DAY_MS = 86_400_000;
 
@@ -29,6 +47,9 @@ function atEndOfDay(date: Date): Date {
 export function resolveRelativeDue(phrase: string, referenceDate: Date): ResolvedDue {
   const source = phrase.trim();
   const text = source.toLowerCase();
+  // Arabic is matched on the normalized form: alef/ya/ta-marbuta variants and
+  // diacritics must not change the result.
+  const arabic = normalizeForSearch(source);
   if (!text) return { dueAt: null, sourceText: source, interpretation: null };
 
   const iso = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
@@ -39,17 +60,17 @@ export function resolveRelativeDue(phrase: string, referenceDate: Date): Resolve
     }
   }
 
-  if (/\b(today|اليوم|النهارده|النهاردة)\b/.test(text)) {
+  if (/\btoday\b/.test(text) || /اليوم|النهارده/.test(arabic)) {
     return { dueAt: atEndOfDay(referenceDate), sourceText: source, interpretation: 'today' };
   }
-  if (/\b(tomorrow|بكرة|بكره|غدا|غدًا)\b/.test(text)) {
+  if (/\btomorrow\b/.test(text) || /بكره|غدا/.test(arabic)) {
     return {
       dueAt: atEndOfDay(new Date(referenceDate.getTime() + DAY_MS)),
       sourceText: source,
       interpretation: 'the day after the meeting',
     };
   }
-  if (/\b(end of week|نهاية الأسبوع|اخر الاسبوع)\b/.test(text)) {
+  if (/\bend of week\b/.test(text) || /نهايه الاسبوع|اخر الاسبوع/.test(arabic)) {
     const ref = new Date(referenceDate);
     const delta = (5 - ref.getUTCDay() + 7) % 7 || 7;
     return {
@@ -58,7 +79,7 @@ export function resolveRelativeDue(phrase: string, referenceDate: Date): Resolve
       interpretation: 'end of the meeting week',
     };
   }
-  const inDays = text.match(/\bin (\d{1,2}) (day|days|أيام|يوم)\b/);
+  const inDays = text.match(/\bin (\d{1,2}) days?\b/) ?? arabic.match(/خلال (\d{1,2}) (?:ايام|يوم)/);
   if (inDays) {
     const n = Number(inDays[1]);
     return {
@@ -68,9 +89,10 @@ export function resolveRelativeDue(phrase: string, referenceDate: Date): Resolve
     };
   }
 
-  for (const [name, weekday] of Object.entries(WEEKDAYS)) {
-    if (!text.includes(name.toLowerCase())) continue;
-    const wantsNext = /\b(next|الجاي|القادم|المقبل)\b/.test(text);
+  for (const { match, weekday, arabic: isArabic } of WEEKDAYS) {
+    const haystack = isArabic ? arabic : text;
+    if (!haystack.includes(match)) continue;
+    const wantsNext = /\bnext\b/.test(text) || /الجاي|القادم|المقبل/.test(arabic);
     const ref = new Date(referenceDate);
     let delta = (weekday - ref.getUTCDay() + 7) % 7;
     if (delta === 0) delta = 7;
@@ -78,7 +100,7 @@ export function resolveRelativeDue(phrase: string, referenceDate: Date): Resolve
     return {
       dueAt: atEndOfDay(new Date(ref.getTime() + delta * DAY_MS)),
       sourceText: source,
-      interpretation: `${wantsNext ? 'next ' : ''}${name} after the meeting date`,
+      interpretation: `${wantsNext ? 'next ' : ''}${match} after the meeting date`,
     };
   }
 

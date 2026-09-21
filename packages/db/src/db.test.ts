@@ -159,8 +159,10 @@ d('database layer (real PostgreSQL)', () => {
   describe('job queue', () => {
     it('claims a queued job exactly once', async () => {
       const job = await enqueueJob(pool, { workspaceId, type: 'demo.job', payload: { n: 1 } });
-      const first = await claimJobs(pool, 'worker-a', 5);
-      const second = await claimJobs(pool, 'worker-b', 5);
+      // Claim generously: other tests share this database and may have queued
+      // work ahead of ours. What matters is that exactly one worker gets it.
+      const first = await claimJobs(pool, 'worker-a', 500);
+      const second = await claimJobs(pool, 'worker-b', 500);
       expect(first.map((j) => j.id)).toContain(job.id);
       expect(second.map((j) => j.id)).not.toContain(job.id);
       await completeJob(pool, job.id, { ok: true });

@@ -195,8 +195,14 @@ export async function analyzeTranscript(input: {
   const rawActions: Array<{ evidenceSegmentIds: string[]; quote: string; source: WindowResult['action_items'][number] }> = [];
   const rawChapters: Array<{ evidenceSegmentIds: string[]; quote?: null; source: { title: string } }> = [];
 
+  /**
+   * Map cited line numbers to segment ids. A line the model invented is kept as
+   * an explicit `unknown-line-N` marker rather than being filtered away, so the
+   * validator reports it as `unknown_segment` with the exact number it made up
+   * instead of the vaguer "no evidence".
+   */
   const mapLines = (lines: number[]): string[] =>
-    lines.map((n) => byIdx.get(n)?.id).filter((id): id is string => Boolean(id));
+    lines.map((n) => byIdx.get(n)?.id ?? `unknown-line-${n}`);
 
   for (const window of windows) {
     const result = await llm.completeJson({

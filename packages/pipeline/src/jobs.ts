@@ -84,6 +84,10 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
   const meeting = await findMeetingUnscoped(ctx.pool, meetingId);
   if (!meeting) throw new Error(`Meeting ${meetingId} not found`);
 
+  // Resolve the provider first: with none configured this throws
+  // ProviderNotConfiguredError immediately instead of doing pointless work.
+  const provider = ctx.registry.asr();
+
   const settings = await workspaceSettings(ctx.pool, meeting.workspace_id);
   const usedMinutes = await audioMinutesThisMonth(ctx.pool, meeting.workspace_id);
   if (settings && usedMinutes >= settings.monthly_audio_minutes_quota) {
@@ -97,7 +101,6 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
     (await findMedia(ctx.pool, scopeless(meeting.workspace_id), meetingId, 'original'));
   if (!media) throw new Error('No media available to transcribe');
 
-  const provider = ctx.registry.asr();
   const storage = ctx.registry.storage();
   const started = Date.now();
 

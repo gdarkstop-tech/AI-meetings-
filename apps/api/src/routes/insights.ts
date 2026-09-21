@@ -73,6 +73,10 @@ export function insightRoutes(): Router {
       const scope = scopeOf(req);
       requirePermission(scope, 'meeting.read');
       const meetingId = uuidSchema.parse(req.params.meetingId);
+      // Confirm the meeting is visible in this workspace before returning
+      // anything; an out-of-scope id must look like a missing one.
+      const meeting = await findMeeting(req.ctx.pool, scope, meetingId);
+      if (!meeting) throw new NotFoundError('Meeting not found');
       const [summaries, decisions, actionItems, chapters] = await Promise.all([
         listSummaries(req.ctx.pool, scope, meetingId),
         listDecisions(req.ctx.pool, scope, { meetingId }),
@@ -226,6 +230,8 @@ export function insightRoutes(): Router {
       const scope = scopeOf(req);
       requirePermission(scope, 'meeting.read');
       const meetingId = uuidSchema.parse(req.params.meetingId);
+      const meeting = await findMeeting(req.ctx.pool, scope, meetingId);
+      if (!meeting) throw new NotFoundError('Meeting not found');
       const [labels, mapped, people] = await Promise.all([
         distinctSpeakers(req.ctx.pool, meetingId),
         listSpeakerMap(req.ctx.pool, meetingId),
