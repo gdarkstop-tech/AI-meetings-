@@ -119,3 +119,12 @@ actual command output, SQL rows and provider response ids. If something cannot w
 decision or platform capability is missing, say so explicitly in NOT DONE — that answer is
 acceptable, a fabricated success is not.
 ```
+
+---
+
+## 6. Phase acceptance record (live)
+
+| Phase | Date | Verified by | Result | Notes / outstanding |
+|---|---|---|---|---|
+| 0 — Audit, risks, plan | 2026-09-21 | Claude Code (self-audit); awaiting your review | Delivered: `docs/PHASE-0-AUDIT.md`, `docs/RISKS.md`, `docs/PLAN.md` | Blockers B1–B4 in `RISKS.md`; decisions D1–D9 in `PLAN.md`. No application code written. |
+| 1 | | | | not started |
