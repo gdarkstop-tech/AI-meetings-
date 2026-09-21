@@ -1,5 +1,5 @@
 import express, { type Express } from 'express';
-import type { Pool } from '@alia/db';
+import type { PipelineContext } from '@alia/pipeline';
 import type { Config } from './config.js';
 import { createLogger, type Logger } from '@alia/observability';
 import { contextMiddleware } from './middleware/context.js';
@@ -8,14 +8,20 @@ import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { authRoutes } from './routes/auth.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { systemRoutes } from './routes/system.js';
+import { meetingRoutes } from './routes/meetings.js';
+import { insightRoutes } from './routes/insights.js';
+import { taskRoutes } from './routes/tasks.js';
+import { intelligenceRoutes } from './routes/intelligence.js';
+import { actionRoutes } from './routes/actions.js';
+import { adminRoutes } from './routes/admin.js';
 
 export interface BuildServerOptions {
   config: Config;
-  pool: Pool;
+  pipeline: PipelineContext;
   logger?: Logger;
 }
 
-export function buildServer({ config, pool, logger }: BuildServerOptions): Express {
+export function buildServer({ config, pipeline, logger }: BuildServerOptions): Express {
   const log = logger ?? createLogger({ level: config.LOG_LEVEL, base: { app: 'api' } });
   const app = express();
 
@@ -50,14 +56,24 @@ export function buildServer({ config, pool, logger }: BuildServerOptions): Expre
     next();
   });
 
-  app.use(express.json({ limit: '100kb' }));
-  app.use(contextMiddleware(pool, log));
+  // Chunk uploads carry raw bytes and parse their own body; everything else is JSON.
+  app.use((req, res, next) => {
+    if (req.method === 'PUT' && /\/uploads\/[^/]+\/chunks\//.test(req.path)) return next();
+    return express.json({ limit: '1mb' })(req, res, next);
+  });
+  app.use(contextMiddleware(pipeline, log));
   app.use(loadSession());
   app.use(csrfProtection);
 
   app.use(systemRoutes());
   app.use('/api/v1/auth', authRoutes(config));
   app.use('/api/v1/workspaces', workspaceRoutes());
+  app.use('/api/v1/meetings', meetingRoutes(config));
+  app.use('/api/v1', insightRoutes());
+  app.use('/api/v1/tasks', taskRoutes());
+  app.use('/api/v1', intelligenceRoutes(config));
+  app.use('/api/v1', actionRoutes());
+  app.use('/api/v1/workspace', adminRoutes());
 
   app.use(notFoundHandler);
   app.use(errorHandler(config.isProduction));

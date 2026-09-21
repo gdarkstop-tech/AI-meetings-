@@ -1,2 +1,15 @@
 export * from './types.js';
 export * from './registry.js';
+export * from './oauth/index.js';
+export { LocalStorageProvider } from './storage/local.js';
+export { S3StorageProvider } from './storage/s3.js';
+export { DeepgramTranscriptionProvider } from './asr/deepgram.js';
+export { ElevenLabsTranscriptionProvider } from './asr/elevenlabs.js';
+export { OpenAiTranscriptionProvider } from './asr/openai.js';
+export { AnthropicLLMProvider } from './llm/anthropic.js';
+export { OpenAiEmbeddingsProvider } from './embeddings/openai.js';
+export { GoogleCalendarProvider } from './calendar/google.js';
+export { MicrosoftCalendarProvider } from './calendar/microsoft.js';
+export { GmailProvider, buildRfc822 } from './email/gmail.js';
+export { MicrosoftEmailProvider } from './email/microsoft.js';
+export { TavilySearchProvider } from './search/tavily.js';

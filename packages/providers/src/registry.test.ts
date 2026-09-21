@@ -1,56 +1,83 @@
 import { describe, expect, it } from 'vitest';
 import { ProviderNotConfiguredError } from '@alia/core';
-import {
-  getCalendarProvider,
-  getEmailProvider,
-  getEmbeddingsProvider,
-  getLLMProvider,
-  getStorageProvider,
-  getTranscriptionProvider,
-  getWebSearchProvider,
-  providerStatuses,
-} from './index.js';
+import { createProviderRegistry } from './index.js';
 
-describe('provider registry (Phase 1: nothing configured, nothing faked)', () => {
-  it('every resolver throws ProviderNotConfiguredError instead of returning a stub', () => {
-    const resolvers = [
-      getStorageProvider,
-      getTranscriptionProvider,
-      getLLMProvider,
-      getEmbeddingsProvider,
-      getEmailProvider,
-      getCalendarProvider,
-      getWebSearchProvider,
-    ];
-    for (const resolve of resolvers) {
-      expect(() => resolve({})).toThrow(ProviderNotConfiguredError);
-    }
+describe('provider registry', () => {
+  it('throws ProviderNotConfiguredError instead of returning a stub when nothing is configured', () => {
+    const registry = createProviderRegistry({});
+    expect(() => registry.storage()).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.asr()).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.llm()).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.embeddings()).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.webSearch()).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.calendar('google')).toThrow(ProviderNotConfiguredError);
+    expect(() => registry.email('gmail')).toThrow(ProviderNotConfiguredError);
   });
 
-  it('reports NOT_CONFIGURED as the error code so the API surfaces 503, not a fake success', () => {
+  it('reports NOT_CONFIGURED with HTTP 503 so the API never fakes success', () => {
     try {
-      getTranscriptionProvider({});
+      createProviderRegistry({}).asr();
       expect.unreachable('should have thrown');
     } catch (err) {
-      expect(err).toBeInstanceOf(ProviderNotConfiguredError);
       expect((err as ProviderNotConfiguredError).code).toBe('NOT_CONFIGURED');
       expect((err as ProviderNotConfiguredError).httpStatus).toBe(503);
     }
   });
 
-  it('status report is honest even when an env var names a provider', () => {
-    const statuses = providerStatuses({ ASR_PROVIDER: 'deepgram' });
+  it('names the exact missing environment variables', () => {
+    const statuses = createProviderRegistry({ ASR_PROVIDER: 'deepgram' }).statuses();
     const asr = statuses.find((s) => s.kind === 'asr');
-    expect(asr?.providerId).toBe('deepgram');
     expect(asr?.configured).toBe(false);
-    expect(asr?.reason).toMatch(/no adapter is implemented yet/i);
+    expect(asr?.requires).toContain('DEEPGRAM_API_KEY');
   });
 
-  it('covers every provider kind with a planned phase', () => {
-    const statuses = providerStatuses({});
-    expect(statuses.map((s) => s.kind).sort()).toEqual(
-      ['asr', 'calendar', 'email', 'embeddings', 'llm', 'search', 'storage'].sort(),
+  it('builds a real local storage provider when configured', async () => {
+    const registry = createProviderRegistry({
+      STORAGE_PROVIDER: 'local',
+      STORAGE_LOCAL_DIR: '/tmp/alia-registry-test',
+    });
+    expect(registry.isConfigured('storage')).toBe(true);
+    const storage = registry.storage();
+    expect(storage.id).toBe('local');
+    const written = await storage.put({
+      key: 'probe/hello.txt',
+      body: Buffer.from('real bytes'),
+      contentType: 'text/plain',
+    });
+    expect(written.bytes).toBe(10);
+    expect((await storage.getBuffer('probe/hello.txt')).toString()).toBe('real bytes');
+    await storage.deletePrefix('probe');
+    expect(await storage.head('probe/hello.txt')).toBeNull();
+  });
+
+  it('builds real ASR and LLM adapters from configuration without calling out', () => {
+    const registry = createProviderRegistry({
+      ASR_PROVIDER: 'elevenlabs',
+      ELEVENLABS_API_KEY: 'test-key-not-used-in-this-test',
+      LLM_PROVIDER: 'anthropic',
+      ANTHROPIC_API_KEY: 'test-key-not-used-in-this-test',
+      LLM_MODEL: 'claude-opus-5',
+    });
+    expect(registry.asr().id).toBe('elevenlabs');
+    expect(registry.asr().modelVersion).toBe('scribe_v2');
+    expect(registry.llm().id).toBe('anthropic');
+    expect(registry.llm().modelVersion).toBe('claude-opus-5');
+    const statuses = registry.statuses();
+    expect(statuses.find((s) => s.kind === 'asr')?.configured).toBe(true);
+    expect(statuses.find((s) => s.kind === 'llm')?.configured).toBe(true);
+    expect(statuses.find((s) => s.kind === 'storage')?.configured).toBe(false);
+  });
+
+  it('requires a public base URL before OAuth can be used', () => {
+    const partial = createProviderRegistry({ GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 'secret' });
+    expect(() => partial.oauthConfig('google')).toThrow(ProviderNotConfiguredError);
+    const full = createProviderRegistry({
+      GOOGLE_CLIENT_ID: 'id',
+      GOOGLE_CLIENT_SECRET: 'secret',
+      PUBLIC_BASE_URL: 'https://app.example.com',
+    });
+    expect(full.oauthConfig('google').redirectUri).toBe(
+      'https://app.example.com/api/v1/integrations/google/callback',
     );
-    expect(statuses.every((s) => s.plannedPhase > 1)).toBe(true);
   });
 });

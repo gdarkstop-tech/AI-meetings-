@@ -20,6 +20,7 @@
       "@alia/core": ["packages/core/src/index.ts"],
       "@alia/db": ["packages/db/src/index.ts"],
       "@alia/observability": ["packages/observability/src/index.ts"],
+      "@alia/pipeline": ["packages/pipeline/src/index.ts"],
       "@alia/policy": ["packages/policy/src/index.ts"],
       "@alia/providers": ["packages/providers/src/index.ts"]
     }

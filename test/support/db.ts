@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { parseSecretKey } from '@alia/core';
 import { createPool, migrate, type Pool } from '@alia/db';
+import { createLogger } from '@alia/observability';
+import { createProviderRegistry, type Env } from '@alia/providers';
+import type { PipelineContext } from '@alia/pipeline';
 
 export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 
@@ -20,3 +24,21 @@ export function uniqueEmail(prefix = 'user'): string {
 }
 
 export const TEST_PASSWORD = 'phase-one-password-2026';
+
+/** 32 zero-free bytes, base64: test-only encryption key, never a production value. */
+export const TEST_SECRETS_KEY = Buffer.alloc(32, 7).toString('base64');
+
+/**
+ * Build a pipeline context for tests. Providers are configured only when the
+ * test passes env for them; otherwise every provider genuinely reports
+ * NOT_CONFIGURED, exactly as in production with no keys.
+ */
+export function buildTestPipeline(pool: Pool, env: Env = {}): PipelineContext {
+  return {
+    pool,
+    registry: createProviderRegistry(env),
+    log: createLogger({ level: 'error', write: () => {} }),
+    secretsKey: parseSecretKey(TEST_SECRETS_KEY),
+    publicBaseUrl: 'https://test.local',
+  };
+}

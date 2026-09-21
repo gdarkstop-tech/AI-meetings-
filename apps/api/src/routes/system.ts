@@ -1,29 +1,29 @@
 import { Router } from 'express';
 import { checkExtensions, pingDatabase } from '@alia/db';
-import { providerStatuses } from '@alia/providers';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler } from './helpers.js';
 
 const startedAt = Date.now();
 
+/**
+ * Health, readiness and an honest capability report.
+ *
+ * `capabilities` is what the UI renders: a feature backed by a configured
+ * provider says so, and one without says exactly which environment variables
+ * are missing. Nothing is described as working when it cannot run.
+ */
 export function systemRoutes(): Router {
   const router = Router();
 
-  /** Liveness: the process is up. No dependencies touched. */
   router.get('/health', (_req, res) => {
     res.json({ status: 'ok', uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) });
   });
 
-  /** Readiness: the database answers and required extensions are installed. */
   router.get(
     '/ready',
     asyncHandler(async (req, res) => {
       if (!(await pingDatabase(req.ctx.pool))) {
-        res.status(503).json({
-          status: 'unavailable',
-          database: 'unreachable',
-          requestId: req.ctx.requestId,
-        });
+        res.status(503).json({ status: 'unavailable', database: 'unreachable', requestId: req.ctx.requestId });
         return;
       }
       const extensions = await checkExtensions(req.ctx.pool);
@@ -37,27 +37,27 @@ export function systemRoutes(): Router {
     }),
   );
 
-  /**
-   * Honest capability report: which external providers are configured.
-   * Phase 1 has none; the UI uses this to show features as unavailable rather
-   * than pretending they work.
-   */
-  router.get('/api/v1/system/capabilities', requireAuth, (_req, res) => {
-    const providers = providerStatuses();
+  router.get('/api/v1/system/capabilities', requireAuth, (req, res) => {
+    const providers = req.ctx.registry.statuses();
+    const configured = (kind: string) => providers.find((p) => p.kind === kind)?.configured ?? false;
     res.json({
-      phase: 1,
       providers,
       features: {
         auth: 'available',
         workspaces: 'available',
         audit: 'available',
         jobQueue: 'available',
-        meetings: 'not_implemented',
-        transcription: 'not_configured',
-        analysis: 'not_configured',
-        search: 'not_implemented',
-        askAi: 'not_implemented',
-        integrations: 'not_configured',
+        meetings: 'available',
+        tasks: 'available',
+        search: 'available',
+        upload: configured('storage') ? 'available' : 'not_configured',
+        transcription: configured('asr') ? 'available' : 'not_configured',
+        analysis: configured('llm') ? 'available' : 'not_configured',
+        semanticSearch: configured('embeddings') ? 'available' : 'not_configured',
+        askAi: configured('llm') ? 'available' : 'not_configured',
+        calendar: configured('calendar') ? 'available' : 'not_configured',
+        email: configured('email') ? 'available' : 'not_configured',
+        research: configured('search') ? 'available' : 'not_configured',
       },
     });
   });

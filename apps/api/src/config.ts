@@ -14,6 +14,14 @@ const schema = z.object({
   RATE_LIMIT_REGISTER_WINDOW_MS: z.coerce.number().int().positive().default(60 * 60_000),
   RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_LOGIN_WINDOW_MS: z.coerce.number().int().positive().default(5 * 60_000),
+  RATE_LIMIT_AI_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AI_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  /** 32 random bytes, base64. Required: integration tokens are encrypted with it. */
+  SECRETS_KEY: z.string().min(1, 'SECRETS_KEY is required (openssl rand -base64 32)'),
+  /** Public HTTPS origin, required for OAuth callbacks. */
+  PUBLIC_BASE_URL: z.string().optional(),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024 * 1024),
+  UPLOAD_CHUNK_SIZE: z.coerce.number().int().positive().default(8 * 1024 * 1024),
 });
 
 export type Config = z.infer<typeof schema> & { isProduction: boolean };

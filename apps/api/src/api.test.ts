@@ -8,6 +8,8 @@ import { createLogger } from '@alia/observability';
 import {
   TEST_DATABASE_URL,
   TEST_PASSWORD,
+  TEST_SECRETS_KEY,
+  buildTestPipeline,
   hasTestDatabase,
   setupTestDatabase,
   uniqueEmail,
@@ -55,10 +57,11 @@ d('API (real database, real HTTP)', () => {
       // The suite registers many accounts from one IP; the login limiter keeps
       // its production value because the brute-force test asserts it fires.
       RATE_LIMIT_REGISTER_MAX: '500',
+      SECRETS_KEY: TEST_SECRETS_KEY,
     } as NodeJS.ProcessEnv);
     app = buildServer({
       config,
-      pool,
+      pipeline: buildTestPipeline(pool),
       logger: createLogger({ level: 'error', write: () => {} }),
     });
   });
@@ -236,10 +239,10 @@ d('API (real database, real HTTP)', () => {
       const user = await registerUser('caps');
       const res = await user.agent.get('/api/v1/system/capabilities');
       expect(res.status).toBe(200);
-      expect(res.body.phase).toBe(1);
       expect(res.body.providers.every((p: { configured: boolean }) => p.configured === false)).toBe(true);
       expect(res.body.features.transcription).toBe('not_configured');
-      expect(res.body.features.meetings).toBe('not_implemented');
+      expect(res.body.features.analysis).toBe('not_configured');
+      expect(res.body.features.meetings).toBe('available');
     });
   });
 

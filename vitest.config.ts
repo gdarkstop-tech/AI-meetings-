@@ -9,6 +9,7 @@ export default defineConfig({
       '@alia/core': r('./packages/core/src/index.ts'),
       '@alia/db': r('./packages/db/src/index.ts'),
       '@alia/observability': r('./packages/observability/src/index.ts'),
+      '@alia/pipeline': r('./packages/pipeline/src/index.ts'),
       '@alia/policy': r('./packages/policy/src/index.ts'),
       '@alia/providers': r('./packages/providers/src/index.ts'),
     },
