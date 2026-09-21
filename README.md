@@ -1,1 +1,63 @@
-# AI-meetings-
+# AI Meeting & Work Assistant
+
+Record or upload a meeting → transcript (speakers + timestamps) → summaries → decisions → action
+items → tasks → search → an assistant that answers questions about past meetings → follow-up email
+and calendar drafts that a human approves before anything leaves the system.
+
+Arabic + English + mixed speech. RTL/LTR from the first screen. Built to the ALIA / EAIOS
+principles: the LLM is never the security boundary, retrieved content is data (not instructions),
+providers are replaceable, and every external side effect is approved and audited.
+
+**This repository currently contains the specification and the build prompts. No application code
+has been written yet.**
+
+---
+
+## نظرة سريعة (بالعربي)
+
+الفكرة: تطبيق يسجّل أو يستقبل تسجيل الاجتماع، ويحوّله إلى Transcript + Summary + Decisions +
+Action Items + Tasks + Research، وبعدها تقدر تبحث وتسأل الـ AI عن أي اجتماع قديم، ويجهّز لك
+Follow-up (إيميل / Calendar) لكن **لا يرسل أي شيء إلا بموافقتك**.
+
+الملفات هنا ثلاث مجموعات:
+1. **المواصفات** — الـ scope والـ architecture والـ data model والأمان (`docs/00` → `docs/06`).
+2. **الـ Master Prompt لـ Replit** — تنسخه كأول رسالة للـ Replit Agent (`docs/10`).
+3. **الـ Phase Prompts + طريقة التحقق** — مرحلة واحدة كل مرة، ولا تقبل مرحلة قبل ما تختبرها بنفسك
+   (`docs/11`, `docs/12`).
+
+القاعدة الأهم: **الـ Agent ممنوع يزوّر أي شيء.** أي ميزة غير منفّذة لازم تفشل بوضوح
+(`NOT_IMPLEMENTED` / `NOT_CONFIGURED`) ولا تظهر نجاحاً وهمياً.
+
+---
+
+## Documents
+
+| File | What it is |
+|---|---|
+| [`docs/00-product-scope.md`](docs/00-product-scope.md) | Full product scope, feature by feature, plus non-goals and open decisions |
+| [`docs/01-architecture.md`](docs/01-architecture.md) | Runtime shape, stack, provider abstraction, AI output contract, Action Gateway |
+| [`docs/02-data-model.md`](docs/02-data-model.md) | PostgreSQL schema, indexes, invariants |
+| [`docs/03-security.md`](docs/03-security.md) | Threat model, authorization, action policy, secrets, privacy, injection defences |
+| [`docs/04-ai-pipeline.md`](docs/04-ai-pipeline.md) | Job stages, language handling, prompts, evaluation, RAG and research design |
+| [`docs/05-integrations.md`](docs/05-integrations.md) | Calendar, email and search provider interfaces, OAuth and execution rules |
+| [`docs/06-replit-notes.md`](docs/06-replit-notes.md) | Platform constraints to design around |
+| [`docs/10-master-prompt-replit.md`](docs/10-master-prompt-replit.md) | **The master prompt** — paste as the first message to the Replit Agent |
+| [`docs/11-phase-prompts.md`](docs/11-phase-prompts.md) | Phase 1–15 prompts, one per message |
+| [`docs/12-verification.md`](docs/12-verification.md) | How to verify each phase, red flags, the "unplug" test |
+| [`docs/adr/`](docs/adr/) | Architecture decision records |
+
+## How to run the build
+
+1. Paste **Section A** of `docs/10-master-prompt-replit.md` as the first message to the Replit Agent.
+2. The agent executes **Phase 0 only** (audit, risks, cost model, plan) and stops.
+3. Review it, answer its open questions, then paste Phase 1 from `docs/11-phase-prompts.md`.
+4. Before accepting any phase, run the checks in `docs/12-verification.md` yourself.
+5. Record the result in the phase acceptance table. Never accept a partial phase.
+
+## Build order (why it is this order)
+
+Foundation → meetings → transcription → analysis → tasks → search → Ask AI → people →
+**Action Gateway** → calendar → email → follow-ups → research → memory → hardening.
+
+The Action Gateway (policy + approval + idempotency + audit) ships **before** any integration that
+can affect the outside world. That ordering is the difference between an assistant and an incident.
