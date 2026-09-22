@@ -20,6 +20,7 @@ const schema = z.object({
   SECRETS_KEY: z.string().min(1, 'SECRETS_KEY is required (openssl rand -base64 32)'),
   /** Public HTTPS origin, required for OAuth callbacks. */
   PUBLIC_BASE_URL: z.string().optional(),
+  METRICS_TOKEN: z.string().optional(),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024 * 1024),
   UPLOAD_CHUNK_SIZE: z.coerce.number().int().positive().default(8 * 1024 * 1024),
 });

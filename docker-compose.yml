@@ -1,0 +1,73 @@
+# Self-hosted deployment: database, API (serving the built client) and worker.
+# Copy .env.example to .env and fill it in before `docker compose up -d`.
+services:
+  db:
+    # pgvector is required (docs/PHASE-0-AUDIT.md §2.3).
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-alia}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-alia}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: npm run db:migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build: .
+    command: npm run start:api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
+      NODE_ENV: production
+      PORT: 4000
+      STORAGE_LOCAL_DIR: /data/media
+    ports:
+      - '${API_PORT:-4000}:4000'
+    volumes:
+      - media-data:/data/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:4000/ready\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # The worker is a separate always-on process. Without it nothing is
+  # transcribed, analysed, purged or executed — the queue just grows.
+  worker:
+    build: .
+    command: npm run start:worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
+      NODE_ENV: production
+      STORAGE_LOCAL_DIR: /data/media
+    volumes:
+      - media-data:/data/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  media-data:

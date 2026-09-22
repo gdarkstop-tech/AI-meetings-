@@ -259,6 +259,36 @@ d('API (real database, real HTTP)', () => {
     });
   });
 
+  describe('metrics', () => {
+    it('exposes Prometheus metrics with counts and no content', async () => {
+      const res = await request(app).get('/metrics');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/plain');
+      expect(res.text).toContain('alia_jobs{status=');
+      expect(res.text).toContain('alia_oldest_queued_job_seconds');
+      expect(res.text).toContain('alia_provider_cost_usd_24h');
+      // Operational counts only — never workspace names or meeting titles.
+      expect(res.text).not.toMatch(/@example\.test/);
+    });
+
+    it('requires the bearer token when one is configured', async () => {
+      const guarded = buildServer({
+        config: loadConfig({
+          NODE_ENV: 'test',
+          DATABASE_URL: TEST_DATABASE_URL,
+          LOG_LEVEL: 'error',
+          SECRETS_KEY: TEST_SECRETS_KEY,
+          METRICS_TOKEN: 'secret-metrics-token',
+        } as NodeJS.ProcessEnv),
+        pipeline: buildTestPipeline(pool),
+        logger: createLogger({ level: 'error', write: () => {} }),
+      });
+      expect((await request(guarded).get('/metrics')).status).toBe(401);
+      const ok = await request(guarded).get('/metrics').set('Authorization', 'Bearer secret-metrics-token');
+      expect(ok.status).toBe(200);
+    });
+  });
+
   describe('error handling', () => {
     it('returns a correlation id and never a stack trace', async () => {
       const res = await request(app).get('/api/v1/does-not-exist');

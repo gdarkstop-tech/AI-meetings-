@@ -1,0 +1,46 @@
+# Fly.io: api and worker as separate processes, which is what this product needs.
+app = "alia-meetings"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[processes]
+  api = "npm run start:api"
+  worker = "npm run start:worker"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4000"
+  STORAGE_PROVIDER = "s3"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = false   # the worker must not be stopped
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["api"]
+
+  [http_service.checks]
+    [[http_service.checks.http]]
+      interval = "30s"
+      timeout = "5s"
+      method = "GET"
+      path = "/ready"
+
+[[vm]]
+  processes = ["api"]
+  size = "shared-cpu-2x"
+  memory = "1gb"
+
+# Transcoding is CPU and memory heavy; give the worker more room.
+[[vm]]
+  processes = ["worker"]
+  size = "performance-1x"
+  memory = "2gb"
+
+# Secrets (never in this file):
+#   fly secrets set SECRETS_KEY=... DATABASE_URL=... ANTHROPIC_API_KEY=... \
+#                   DEEPGRAM_API_KEY=... S3_BUCKET=... S3_ACCESS_KEY_ID=... \
+#                   S3_SECRET_ACCESS_KEY=... PUBLIC_BASE_URL=https://...

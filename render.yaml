@@ -1,0 +1,71 @@
+# Render: web service + always-on worker + managed Postgres.
+services:
+  - type: web
+    name: alia-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: npm run start:api
+    healthCheckPath: /ready
+    preDeployCommand: npm run db:migrate
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alia-postgres
+          property: connectionString
+      # Set in the dashboard, not here:
+      - key: SECRETS_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+  # Without this worker nothing is transcribed, analysed, purged or executed.
+  - type: worker
+    name: alia-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: npm run start:worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alia-postgres
+          property: connectionString
+      - key: SECRETS_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+databases:
+  - name: alia-postgres
+    postgresMajorVersion: "16"
+    # Enable pgvector, pg_trgm and unaccent before the first deploy;
+    # `npm run db:migrate` fails loudly if they are missing.

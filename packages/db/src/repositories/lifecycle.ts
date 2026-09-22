@@ -285,3 +285,43 @@ export async function updateWorkspaceSettings(
     ],
   );
 }
+
+// ----------------------------------------------------------------- metrics
+export interface OperationalMetrics {
+  jobs: Record<string, number>;
+  meetings: Record<string, number>;
+  actions: Record<string, number>;
+  providerCalls: { success: number; failure: number; costUsd: number };
+  oldestQueuedJobSeconds: number;
+}
+
+/** Cross-workspace operational counts for monitoring. No content, no names. */
+export async function operationalMetrics(db: Queryable): Promise<OperationalMetrics> {
+  const grouped = async (sql: string): Promise<Record<string, number>> => {
+    const { rows } = await db.query<{ k: string; c: string }>(sql);
+    return Object.fromEntries(rows.map((r) => [r.k, Number(r.c)]));
+  };
+
+  const providerCalls = await db.query<{ outcome: string; c: string; cost: string }>(
+    `SELECT outcome, count(*)::text AS c, COALESCE(sum(cost_usd),0)::text AS cost
+       FROM provider_calls WHERE created_at > now() - interval '24 hours' GROUP BY outcome`,
+  );
+  const oldest = await db.query<{ age: string }>(
+    `SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(run_after))), 0)::text AS age
+       FROM jobs WHERE status = 'queued'`,
+  );
+
+  return {
+    jobs: await grouped(`SELECT status AS k, count(*)::text AS c FROM jobs GROUP BY status`),
+    meetings: await grouped(
+      `SELECT status AS k, count(*)::text AS c FROM meetings WHERE deleted_at IS NULL GROUP BY status`,
+    ),
+    actions: await grouped(`SELECT status AS k, count(*)::text AS c FROM actions GROUP BY status`),
+    providerCalls: {
+      success: Number(providerCalls.rows.find((r) => r.outcome === 'success')?.c ?? 0),
+      failure: Number(providerCalls.rows.find((r) => r.outcome === 'failure')?.c ?? 0),
+      costUsd: providerCalls.rows.reduce((sum, r) => sum + Number(r.cost ?? 0), 0),
+    },
+    oldestQueuedJobSeconds: Math.max(0, Math.round(Number(oldest.rows[0]?.age ?? 0))),
+  };
+}

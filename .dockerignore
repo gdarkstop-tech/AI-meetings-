@@ -1,0 +1,8 @@
+node_modules
+.git
+artifacts
+test-results
+playwright-report
+apps/web/dist
+*.log
+.env

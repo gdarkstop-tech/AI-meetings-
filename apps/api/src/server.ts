@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import type { PipelineContext } from '@alia/pipeline';
 import type { Config } from './config.js';
@@ -8,6 +11,7 @@ import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { authRoutes } from './routes/auth.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { systemRoutes } from './routes/system.js';
+import { metricsRoutes } from './routes/metrics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { insightRoutes } from './routes/insights.js';
 import { taskRoutes } from './routes/tasks.js';
@@ -66,6 +70,7 @@ export function buildServer({ config, pipeline, logger }: BuildServerOptions): E
   app.use(csrfProtection);
 
   app.use(systemRoutes());
+  app.use(metricsRoutes(config.METRICS_TOKEN));
   app.use('/api/v1/auth', authRoutes(config));
   app.use('/api/v1/workspaces', workspaceRoutes());
   app.use('/api/v1/meetings', meetingRoutes(config));
@@ -74,6 +79,21 @@ export function buildServer({ config, pipeline, logger }: BuildServerOptions): E
   app.use('/api/v1', intelligenceRoutes(config));
   app.use('/api/v1', actionRoutes());
   app.use('/api/v1/workspace', adminRoutes());
+
+  // In production the API also serves the built client, so a deployment is one
+  // process plus the worker. In development Vite serves the client instead.
+  if (config.isProduction) {
+    const clientDir = fileURLToPath(new URL('../../web/dist/', import.meta.url));
+    if (existsSync(clientDir)) {
+      app.use(express.static(clientDir, { index: false, maxAge: '1h' }));
+      app.get(/^\/(?!api|health|ready|metrics).*/, (_req, res) => {
+        res.sendFile(join(clientDir, 'index.html'));
+      });
+      log.info('serving_client', { clientDir });
+    } else {
+      log.warn('client_bundle_missing', { clientDir });
+    }
+  }
 
   app.use(notFoundHandler);
   app.use(errorHandler(config.isProduction));

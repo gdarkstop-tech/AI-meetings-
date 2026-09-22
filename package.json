@@ -22,7 +22,11 @@
     "dev:worker": "tsx watch apps/worker/src/index.ts",
     "dev:web": "vite --config apps/web/vite.config.ts",
     "build:web": "vite build --config apps/web/vite.config.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "start:api": "tsx apps/api/src/index.ts",
+    "start:worker": "tsx apps/worker/src/index.ts",
+    "backup": "bash scripts/backup.sh",
+    "restore:drill": "bash scripts/restore-drill.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
