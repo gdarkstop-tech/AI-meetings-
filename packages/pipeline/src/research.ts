@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import {
   findResearchRequestUnscoped,
@@ -71,24 +73,108 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-async function fetchPageText(url: string, timeoutMs = 12_000): Promise<string | null> {
+/**
+ * SSRF guard.
+ *
+ * Research fetches URLs that came from a search provider, and the query that
+ * produced them came from a user. Without this, a poisoned or malicious result
+ * would make the server fetch internal addresses — cloud metadata endpoints
+ * (169.254.169.254), loopback admin panels, private subnets — and hand the
+ * contents to the model. Only public http(s) destinations are allowed.
+ */
+export function isBlockedAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) {
+    const parts = address.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;                     // this-network, private, loopback
+    if (a === 169 && b === 254) return true;                               // link-local, incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;                      // private
+    if (a === 192 && b === 168) return true;                               // private
+    if (a === 100 && b >= 64 && b <= 127) return true;                     // CGNAT
+    if (a === 198 && (b === 18 || b === 19)) return true;                  // benchmarking
+    if (a === 192 && b === 0) return true;                                 // IETF protocol assignments/TEST-NET-1
+    if (a >= 224) return true;                                             // multicast, reserved, broadcast
+    return false;
+  }
+  if (family === 6) {
+    const ip = address.toLowerCase();
+    if (ip === '::' || ip === '::1') return true;                          // unspecified, loopback
+    if (ip.startsWith('fc') || ip.startsWith('fd')) return true;           // unique local
+    if (ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true; // link-local
+    if (ip.startsWith('ff')) return true;                                  // multicast
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);          // IPv4-mapped
+    if (mapped) return isBlockedAddress(mapped[1]);
+    return false;
+  }
+  return true; // not an IP literal we understand
+}
+
+/** Returns the URL when it is safe to fetch, or null with the reason logged by the caller. */
+export async function resolvePublicUrl(raw: string): Promise<URL | null> {
+  let url: URL;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'user-agent': 'ALIA-Meetings-Research/1.0 (+respects robots and rate limits)' },
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const type = res.headers.get('content-type') ?? '';
-    if (!type.includes('text/html') && !type.includes('text/plain')) return null;
-    const body = (await res.text()).slice(0, 400_000);
-    return htmlToText(body).slice(0, 12_000);
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.username || url.password) return null;
+
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(host)) return isBlockedAddress(host) ? null : url;
+
+  try {
+    const addresses = await lookup(host, { all: true });
+    if (addresses.length === 0) return null;
+    // Every resolved address must be public: one private answer is enough to refuse.
+    if (addresses.some((entry) => isBlockedAddress(entry.address))) return null;
+    return url;
   } catch {
     return null;
   }
 }
+
+async function fetchPageText(url: string, timeoutMs = 12_000, maxRedirects = 3): Promise<string | null> {
+  let target = await resolvePublicUrl(url);
+  if (!target) return null;
+
+  try {
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(target, {
+        signal: controller.signal,
+        // Redirects are followed manually so every hop is re-validated; a public
+        // URL that redirects to 169.254.169.254 must not be followed.
+        redirect: 'manual',
+        headers: { 'user-agent': 'ALIA-Meetings-Research/1.0 (+respects robots and rate limits)' },
+      });
+      clearTimeout(timer);
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (!location) return null;
+        const next = await resolvePublicUrl(new URL(location, target).toString());
+        if (!next) return null;
+        target = next;
+        continue;
+      }
+      if (!res.ok) return null;
+      const type = res.headers.get('content-type') ?? '';
+      if (!type.includes('text/html') && !type.includes('text/plain')) return null;
+      const body = (await res.text()).slice(0, 400_000);
+      return htmlToText(body).slice(0, 12_000);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Exposed for tests: fetch a page through the SSRF guard. */
+export const fetchResearchPage = fetchPageText;
 
 export interface ResearchOutcome {
   sources: number;

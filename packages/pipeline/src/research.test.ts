@@ -18,7 +18,9 @@ import type {
   ProviderRegistry,
   WebSearchProvider,
 } from '@alia/providers';
-import { findingsSchema, htmlToText, runResearch } from './research.js';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { fetchResearchPage, findingsSchema, htmlToText, isBlockedAddress, resolvePublicUrl, runResearch } from './research.js';
 import type { PipelineContext } from './context.js';
 import { buildTestPipeline, hasTestDatabase, setupTestDatabase, uniqueEmail } from '../../../test/support/db.js';
 
@@ -169,4 +171,87 @@ d('research pipeline (provenance or nothing)', () => {
     expect(text).toBe('Title Hello & welcome');
     expect(text).not.toContain('evil');
   });
+});
+
+/**
+ * Regression tests for the SSRF defect found in verification: the research
+ * fetcher used to follow any URL a search provider returned, including internal
+ * addresses and redirects to cloud metadata endpoints.
+ */
+describe('research fetcher SSRF guard', () => {
+  it('blocks loopback, private, link-local, CGNAT and reserved addresses', () => {
+    for (const address of [
+      '127.0.0.1', '127.9.9.9', '0.0.0.0', '10.1.2.3', '172.16.5.4', '172.31.255.255',
+      '192.168.1.1', '169.254.169.254', '100.64.0.1', '198.18.0.1', '224.0.0.1',
+      '255.255.255.255', '::1', '::', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', 'not-an-ip',
+    ]) {
+      expect(isBlockedAddress(address), `${address} must be blocked`).toBe(true);
+    }
+  });
+
+  it('allows ordinary public addresses', () => {
+    for (const address of ['8.8.8.8', '1.1.1.1', '93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946']) {
+      expect(isBlockedAddress(address), `${address} must be allowed`).toBe(false);
+    }
+  });
+
+  it('refuses non-http schemes, credentials in the URL, and private hosts', async () => {
+    expect(await resolvePublicUrl('file:///etc/passwd')).toBeNull();
+    expect(await resolvePublicUrl('ftp://example.com/x')).toBeNull();
+    expect(await resolvePublicUrl('http://user:pass@example.com/')).toBeNull();
+    expect(await resolvePublicUrl('http://127.0.0.1:9911/')).toBeNull();
+    expect(await resolvePublicUrl('http://localhost:9911/')).toBeNull();
+    expect(await resolvePublicUrl('http://169.254.169.254/latest/meta-data/')).toBeNull();
+    expect(await resolvePublicUrl('http://[::1]/')).toBeNull();
+    expect(await resolvePublicUrl('not a url at all')).toBeNull();
+  });
+
+  it('does not read an internal service even when it is reachable and returns HTML', async () => {
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body>INTERNAL-ONLY-SECRET</body></html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const text = await fetchResearchPage(`http://127.0.0.1:${port}/`);
+      expect(text).toBeNull();
+      // The guard runs before any request: the internal service was never hit.
+      expect(requests).toBe(0);
+    } finally {
+      server.close();
+    }
+  }, 20_000);
+
+  it('does not follow a redirect that points at an internal address', async () => {
+    let metadataHits = 0;
+    const internal = createServer((_req, res) => {
+      metadataHits += 1;
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>credentials</html>');
+    });
+    await new Promise<void>((resolve) => internal.listen(0, '127.0.0.1', resolve));
+    const internalPort = (internal.address() as AddressInfo).port;
+
+    const redirector = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${internalPort}/` });
+      res.end();
+    });
+    await new Promise<void>((resolve) => redirector.listen(0, '127.0.0.1', resolve));
+
+    try {
+      // The first hop is itself loopback, so it is refused outright; the point
+      // of the assertion is that the internal target is never fetched.
+      const text = await fetchResearchPage(
+        `http://127.0.0.1:${(redirector.address() as AddressInfo).port}/`,
+      );
+      expect(text).toBeNull();
+      expect(metadataHits).toBe(0);
+    } finally {
+      internal.close();
+      redirector.close();
+    }
+  }, 20_000);
 });
