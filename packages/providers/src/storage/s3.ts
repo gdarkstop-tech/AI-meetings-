@@ -12,7 +12,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import type { StorageObject, StorageProvider } from '../types.js';
+import type { ByteRange, StorageObject, StorageProvider } from '../types.js';
 
 export interface S3Config {
   bucket: string;
@@ -64,8 +64,14 @@ export class S3StorageProvider implements StorageProvider {
     });
   }
 
-  async getStream(key: string): Promise<Readable> {
-    const res = await this.client.send(new GetObjectCommand({ Bucket: this.config.bucket, Key: key }));
+  async getStream(key: string, range?: ByteRange): Promise<Readable> {
+    const res = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: key,
+        Range: range ? `bytes=${range.start}-${range.end}` : undefined,
+      }),
+    );
     if (!res.Body) throw new Error(`Object not found: ${key}`);
     return res.Body as Readable;
   }

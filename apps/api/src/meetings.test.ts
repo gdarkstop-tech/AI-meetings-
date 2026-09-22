@@ -167,6 +167,21 @@ d('meetings lifecycle (real database, real storage, real jobs)', () => {
       expect(download.status).toBe(200);
       expect(createHash('sha256').update(download.body).digest('hex')).toBe(expectedChecksum);
 
+      // Range requests work, so the player can seek to a transcript timestamp.
+      const ranged = await user.agent
+        .get(`/api/v1/meetings/${meeting.id}/media?kind=original`)
+        .set('Range', 'bytes=0-99')
+        .buffer(true);
+      expect(ranged.status).toBe(206);
+      expect(ranged.headers['content-range']).toBe(`bytes 0-99/${payload.length}`);
+      expect(ranged.headers['accept-ranges']).toBe('bytes');
+      expect(ranged.body.length).toBe(100);
+
+      const unsatisfiable = await user.agent
+        .get(`/api/v1/meetings/${meeting.id}/media?kind=original`)
+        .set('Range', `bytes=${payload.length + 10}-`);
+      expect(unsatisfiable.status).toBe(416);
+
       // Processing was queued; nothing was transcribed inside the request.
       const detail = await user.agent.get(`/api/v1/meetings/${meeting.id}`);
       expect(detail.body.meeting.status).toBe('uploaded');

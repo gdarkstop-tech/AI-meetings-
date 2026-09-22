@@ -33,10 +33,16 @@ export interface StorageObject {
   contentType: string;
 }
 
+/** Byte range for partial reads, so media players can seek. */
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
 export interface StorageProvider {
   readonly id: string;
   put(input: { key: string; body: Buffer | Readable; contentType: string; bytes?: number }): Promise<StorageObject>;
-  getStream(key: string): Promise<Readable>;
+  getStream(key: string, range?: ByteRange): Promise<Readable>;
   getBuffer(key: string): Promise<Buffer>;
   /** Copies the object to a local temp path so ffmpeg can work on a real file. */
   downloadToFile(key: string, destPath: string): Promise<{ path: string; bytes: number }>;

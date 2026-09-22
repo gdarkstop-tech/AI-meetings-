@@ -80,3 +80,37 @@ input { width: 100%; }
 .error { color: var(--danger); font-size: 13px; margin-bottom: 12px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+
+/* --- application shell --- */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+.tab {
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  padding: 7px 12px; color: var(--muted); font-size: 13px;
+}
+.tab:hover { color: var(--text); border-color: var(--border); }
+.tab.active { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+
+.row.clickable { cursor: pointer; }
+.row.clickable:hover { background: rgba(255,255,255,0.02); }
+.row h2 { margin: 0 0 2px; }
+
+.checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 6px 0; cursor: pointer; }
+.checkbox input { width: auto; }
+.done { text-decoration: line-through; color: var(--muted); }
+
+.button-like {
+  display: inline-flex; align-items: center; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 9px 12px; font-size: 14px;
+}
+.button-like:hover { border-color: var(--accent); }
+button.danger { border-color: rgba(255,107,107,0.4); color: var(--danger); }
+
+.pre {
+  white-space: pre-wrap; word-break: break-word; font-family: inherit;
+  font-size: 13px; color: var(--text); background: rgba(0,0,0,0.25);
+  border-radius: 8px; padding: 10px; margin: 8px 0 0;
+}
+details summary { cursor: pointer; }
+audio { filter: invert(0.92) hue-rotate(180deg); border-radius: 8px; }
+main { display: block; }

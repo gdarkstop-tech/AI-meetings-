@@ -408,9 +408,36 @@ export function meetingRoutes(config: Config): Router {
         (await findMedia(req.ctx.pool, scope, meetingId, 'original'));
       if (!media) throw new NotFoundError('No media for this meeting');
 
+      const storage = req.ctx.registry.storage();
+      const total = Number(media.bytes);
       res.setHeader('Content-Type', media.mime_type);
       res.setHeader('Cache-Control', 'private, max-age=0, no-store');
-      const stream = await req.ctx.registry.storage().getStream(media.storage_key);
+      // Range support is what makes the player seekable — clicking a timestamp
+      // in the transcript is useless without it.
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      const rangeHeader = req.headers.range;
+      const match = typeof rangeHeader === 'string' ? /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim()) : null;
+
+      if (match && total > 0) {
+        const start = match[1] ? Number(match[1]) : 0;
+        const end = match[2] ? Math.min(Number(match[2]), total - 1) : total - 1;
+        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= total) {
+          res.status(416).setHeader('Content-Range', `bytes */${total}`);
+          res.end();
+          return;
+        }
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+        res.setHeader('Content-Length', String(end - start + 1));
+        const partial = await storage.getStream(media.storage_key, { start, end });
+        partial.on('error', () => res.destroy());
+        partial.pipe(res);
+        return;
+      }
+
+      if (total > 0) res.setHeader('Content-Length', String(total));
+      const stream = await storage.getStream(media.storage_key);
       stream.on('error', () => res.destroy());
       stream.pipe(res);
     }),

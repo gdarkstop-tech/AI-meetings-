@@ -3,7 +3,7 @@ import { mkdir, rm, readdir, stat, copyFile, readFile, writeFile } from 'node:fs
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
-import type { StorageObject, StorageProvider } from '../types.js';
+import type { ByteRange, StorageObject, StorageProvider } from '../types.js';
 
 /**
  * Filesystem storage. A real implementation, not a mock: bytes are written to
@@ -61,8 +61,10 @@ export class LocalStorageProvider implements StorageProvider {
     return { key: input.key, bytes: info.size, contentType: input.contentType };
   }
 
-  async getStream(key: string): Promise<Readable> {
-    return createReadStream(this.resolve(key));
+  async getStream(key: string, range?: ByteRange): Promise<Readable> {
+    return range
+      ? createReadStream(this.resolve(key), { start: range.start, end: range.end })
+      : createReadStream(this.resolve(key));
   }
 
   async getBuffer(key: string): Promise<Buffer> {
