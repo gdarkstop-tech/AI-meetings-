@@ -1,5 +1,14 @@
 # Self-hosted deployment: database, API (serving the built client) and worker.
+#
+# Storage: S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, Wasabi).
+# The containers run as an unprivileged user and mount no writable data volume,
+# so there is no volume-ownership problem to work around. Local filesystem
+# storage stays available for development and tests outside containers
+# (STORAGE_PROVIDER=local with npm run dev:api / dev:worker).
+#
 # Copy .env.example to .env and fill it in before `docker compose up -d`.
+# Compose refuses to start if a required storage variable is missing rather
+# than booting containers that would fail on the first upload.
 services:
   db:
     # pgvector is required (docs/PHASE-0-AUDIT.md §2.3).
@@ -30,16 +39,22 @@ services:
   api:
     build: .
     command: npm run start:api
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
       NODE_ENV: production
       PORT: 4000
-      STORAGE_LOCAL_DIR: /data/media
+      STORAGE_PROVIDER: s3
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
+      S3_REGION: ${S3_REGION:?set S3_REGION in .env}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      # Leave unset for AWS S3; set it for R2, MinIO or another S3-compatible endpoint.
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
     ports:
       - '${API_PORT:-4000}:4000'
-    volumes:
-      - media-data:/data/media
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -53,16 +68,24 @@ services:
 
   # The worker is a separate always-on process. Without it nothing is
   # transcribed, analysed, purged or executed — the queue just grows.
+  # It writes only to /tmp while transcoding, which the image already allows
+  # for the unprivileged user; give the host enough free disk for the largest
+  # meeting you expect to process.
   worker:
     build: .
     command: npm run start:worker
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
       NODE_ENV: production
-      STORAGE_LOCAL_DIR: /data/media
-    volumes:
-      - media-data:/data/media
+      STORAGE_PROVIDER: s3
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
+      S3_REGION: ${S3_REGION:?set S3_REGION in .env}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -70,4 +93,3 @@ services:
 
 volumes:
   db-data:
-  media-data:
