@@ -16,6 +16,7 @@ import {
   listSummaries,
   markActionItemReviewed,
   reviewDecision,
+  upsertMemory,
   upsertPerson,
   withTransaction,
   writeAudit,
@@ -122,6 +123,19 @@ export function insightRoutes(): Router {
           ownerPersonId: input.ownerPersonId ?? null,
         });
         if (!row) return null;
+        // An accepted decision becomes something the assistant may remember —
+        // source-linked, visible in Settings, and deletable by the user.
+        if (input.status === 'accepted') {
+          await upsertMemory(client, scope, {
+            scope: 'workspace',
+            type: 'fact',
+            key: row.text.slice(0, 200),
+            value: { decidedOn: row.decided_on, owner: row.owner_hint, meetingId: row.meeting_id },
+            sourceType: 'decision',
+            sourceId: row.id,
+            createdBy: 'user',
+          });
+        }
         await writeAudit(client, {
           workspaceId: scope.workspaceId,
           actorType: 'user',

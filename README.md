@@ -8,9 +8,14 @@ Arabic + English + mixed speech. RTL/LTR from the first screen. Built to the ALI
 principles: the LLM is never the security boundary, retrieved content is data (not instructions),
 providers are replaceable, and every external side effect is approved and audited.
 
-**Status: Phase 1 (foundation) is implemented and verified. Phases 2-15 are not started.**
-Meetings, transcription, analysis, search and integrations do not exist yet; the running app
-reports them as `not_implemented` / `not_configured` rather than faking them.
+**Status: the product is built and verified end to end.** Meetings, resumable upload and browser
+recording, ffmpeg normalization, speech-to-text, evidence-validated analysis, tasks, bilingual
+hybrid search, Ask-AI with citations, the Action Gateway with human approval, calendar and email
+integrations, research with provenance, consent/retention/erasure, and a deployable
+API + worker + client.
+
+Every external capability is a real adapter selected by configuration. Anything without
+credentials reports `NOT_CONFIGURED` and is visibly unavailable — nothing is ever simulated.
 
 ---
 
@@ -55,15 +60,40 @@ Health and honesty endpoints: `GET /health`, `GET /ready` (database + extensions
 ## Repository layout
 
 ```
-apps/api            Express API: auth, workspaces, audit, system
-apps/worker         background job runner (DB-backed queue)
+apps/api            HTTP API: auth, meetings, uploads, insights, tasks, search,
+                    ask-AI, actions, integrations, research, workspace governance
+apps/worker         background worker: transcode, transcribe, embed, analyse,
+                    research, retention sweep, erasure, approved external actions
 apps/web            React + Vite client (ar/en, RTL/LTR)
-packages/core       domain types, errors, Arabic/English text normalization — no I/O
+packages/core       domain types, errors, Arabic/English normalization, evidence
+                    validation, consent/retention rules, crypto — no I/O
 packages/db         schema, SQL migrations, repositories (the only place SQL lives)
-packages/policy     deterministic RBAC
-packages/providers  provider interfaces; unconfigured providers throw NOT_CONFIGURED
+packages/pipeline   media, analysis, search, RAG, research, Action Gateway, jobs
+packages/policy     deterministic RBAC and external-action policy
+packages/providers  storage, ASR, LLM, embeddings, calendar, email, web search
 packages/observability  structured logging with secret redaction
 ```
+
+## How it works
+
+```
+record / upload → resumable chunked upload → object storage
+   → ffmpeg normalize (mono 16 kHz) → speech-to-text (diarized, timestamped)
+   → evidence-validated analysis (summaries, decisions, action items, chapters)
+   → human accepts → tasks
+   → hybrid Arabic/English search + Ask-AI with citations
+   → follow-up drafts → policy → human approval → Action Gateway → email/calendar
+```
+
+Two rules hold throughout: the model proposes and deterministic code decides, and anything the
+model cannot support with a transcript segment or a retrieved source is dropped and counted rather
+than shown.
+
+## Deployment
+
+See [`docs/07-deployment.md`](docs/07-deployment.md). `docker compose up -d --build` runs Postgres
+with pgvector, applies migrations, and starts the API and the always-on worker. `fly.toml` and
+`render.yaml` are working starting points for managed platforms.
 
 ## Documents
 

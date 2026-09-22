@@ -12,3 +12,4 @@ export * from './repositories/search.js';
 export * from './repositories/actions.js';
 export * from './repositories/lifecycle.js';
 export * from './repositories/chat.js';
+export * from './repositories/research.js';

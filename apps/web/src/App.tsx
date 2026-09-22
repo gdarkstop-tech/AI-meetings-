@@ -11,6 +11,7 @@ import { Tasks } from './pages/Tasks.js';
 import { Search } from './pages/Search.js';
 import { Ask } from './pages/Ask.js';
 import { Approvals } from './pages/Approvals.js';
+import { Research } from './pages/Research.js';
 import { SettingsPage } from './pages/Settings.js';
 
 const LOCALE_KEY = 'alia.locale';
@@ -80,6 +81,10 @@ export function App() {
         return <Search locale={locale} />;
       case 'ask':
         return <Ask locale={locale} />;
+      case 'research':
+        return <Research locale={locale} timezone={timezone} />;
+      case 'research-detail':
+        return <Research locale={locale} timezone={timezone} detailId={route.id} />;
       case 'approvals':
         return <Approvals locale={locale} timezone={timezone} />;
       case 'settings':

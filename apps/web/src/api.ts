@@ -246,6 +246,19 @@ export const api = {
       json('POST', { to }),
     ),
 
+  research: () =>
+    call<{ requests: Array<{ id: string; question: string; status: string; failure_reason: string | null; created_at: string }> }>(
+      '/api/v1/research',
+    ),
+  researchDetail: (id: string) =>
+    call<{
+      request: { id: string; question: string; status: string; failure_reason: string | null };
+      sources: Array<{ id: string; url: string; title: string | null; publisher: string | null; retrieved_at: string }>;
+      report: { report_md: string; findings: Array<Record<string, unknown>>; model_version: string } | null;
+    }>(`/api/v1/research/${id}`),
+  requestResearch: (question: string) =>
+    call<{ request: { id: string } }>('/api/v1/research', json('POST', { question })),
+
   settings: () =>
     call<{
       settings: {

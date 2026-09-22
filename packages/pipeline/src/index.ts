@@ -6,4 +6,5 @@ export * from './search.js';
 export * from './rag.js';
 export * from './followups.js';
 export * from './gateway.js';
+export * from './research.js';
 export * from './jobs.js';

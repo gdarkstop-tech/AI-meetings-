@@ -30,6 +30,7 @@ import {
 } from '@alia/db';
 import { analyzeTranscript } from './analysis.js';
 import { executeAction } from './gateway.js';
+import { runResearch } from './research.js';
 import { normalizeToSpeechAudio, withTempDir } from './media.js';
 import type { PipelineContext } from './context.js';
 
@@ -448,6 +449,13 @@ export const actionExecute: JobHandler = async (ctx, job) => {
   return { providerResponseId: result.providerResponseId ?? null };
 };
 
+/** 8. Research: plan queries, fetch real pages, cite what was retrieved. */
+export const researchRun: JobHandler = async (ctx, job) => {
+  const requestId = String(job.payload.requestId);
+  const outcome = await runResearch(ctx, requestId);
+  return { ...outcome };
+};
+
 export const HANDLERS: Record<string, JobHandler> = {
   'media.normalize': mediaNormalize,
   'asr.transcribe': asrTranscribe,
@@ -456,4 +464,5 @@ export const HANDLERS: Record<string, JobHandler> = {
   'retention.sweep': retentionSweep,
   'meeting.purge': meetingPurge,
   'action.execute': actionExecute,
+  'research.run': researchRun,
 };

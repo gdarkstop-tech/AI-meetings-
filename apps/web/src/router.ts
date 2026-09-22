@@ -7,6 +7,8 @@ export type Route =
   | { name: 'tasks' }
   | { name: 'search' }
   | { name: 'ask' }
+  | { name: 'research' }
+  | { name: 'research-detail'; id: string }
   | { name: 'approvals' }
   | { name: 'settings' };
 
@@ -22,6 +24,8 @@ export function parseHash(hash: string): Route {
       return { name: 'search' };
     case 'ask':
       return { name: 'ask' };
+    case 'research':
+      return param ? { name: 'research-detail', id: param } : { name: 'research' };
     case 'approvals':
       return { name: 'approvals' };
     case 'settings':

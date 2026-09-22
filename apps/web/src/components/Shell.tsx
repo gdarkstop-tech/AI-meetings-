@@ -19,6 +19,7 @@ const NAV: Array<{ path: string; key: TranslationKey; route: Route['name'] }> = 
   { path: '#/tasks', key: 'nav.tasks', route: 'tasks' },
   { path: '#/search', key: 'nav.search', route: 'search' },
   { path: '#/ask', key: 'nav.ask', route: 'ask' },
+  { path: '#/research', key: 'nav.research', route: 'research' },
   { path: '#/approvals', key: 'nav.approvals', route: 'approvals' },
   { path: '#/settings', key: 'nav.settings', route: 'settings' },
 ];

@@ -1,7 +1,21 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { NotFoundError, type Scope } from '@alia/core';
-import { appendMessage, createConversation, findConversation, listConversations, listMessages } from '@alia/db';
+import { NotFoundError, ProviderNotConfiguredError, type Scope } from '@alia/core';
+import {
+  appendMessage,
+  createConversation,
+  createResearchRequest,
+  enqueueJob,
+  findConversation,
+  findResearchReport,
+  findResearchRequest,
+  listConversations,
+  listMessages,
+  listResearchRequests,
+  listResearchSources,
+  withTransaction,
+  writeAudit,
+} from '@alia/db';
 import { askQuestion, searchWorkspace } from '@alia/pipeline';
 import { requirePermission } from '@alia/policy';
 import type { Config } from '../config.js';
@@ -117,6 +131,77 @@ export function intelligenceRoutes(config: Config): Router {
         model: result.modelVersion,
         droppedCitations: result.droppedCitations,
       });
+    }),
+  );
+
+  // --------------------------------------------------------------- research
+  router.post(
+    '/research',
+    requireScope,
+    aiLimiter,
+    asyncHandler(async (req, res) => {
+      const scope = scopeOf(req);
+      requirePermission(scope, 'meeting.create');
+      const input = parseBody(
+        z.object({
+          question: z.string().trim().min(8).max(500),
+          originMeetingId: z.string().uuid().optional(),
+        }),
+        req.body,
+      );
+      // Refuse before creating a request we cannot possibly fulfil.
+      if (!req.ctx.registry.isConfigured('search')) throw new ProviderNotConfiguredError('search');
+      if (!req.ctx.registry.isConfigured('llm')) throw new ProviderNotConfiguredError('llm');
+
+      const request = await withTransaction(req.ctx.pool, async (client) => {
+        const row = await createResearchRequest(client, scope, {
+          question: input.question,
+          originMeetingId: input.originMeetingId ?? null,
+        });
+        await enqueueJob(client, {
+          workspaceId: scope.workspaceId,
+          type: 'research.run',
+          payload: { requestId: row.id },
+          maxAttempts: 2,
+        });
+        await writeAudit(client, {
+          workspaceId: scope.workspaceId,
+          actorType: 'user',
+          actorId: scope.userId,
+          action: 'research.request',
+          targetType: 'research_request',
+          targetId: row.id,
+          result: 'success',
+        });
+        return row;
+      });
+      res.status(201).json({ request });
+    }),
+  );
+
+  router.get(
+    '/research',
+    requireScope,
+    asyncHandler(async (req, res) => {
+      const scope = scopeOf(req);
+      requirePermission(scope, 'meeting.read');
+      res.json({ requests: await listResearchRequests(req.ctx.pool, scope) });
+    }),
+  );
+
+  router.get(
+    '/research/:requestId',
+    requireScope,
+    asyncHandler(async (req, res) => {
+      const scope = scopeOf(req);
+      requirePermission(scope, 'meeting.read');
+      const request = await findResearchRequest(req.ctx.pool, scope, uuidSchema.parse(req.params.requestId));
+      if (!request) throw new NotFoundError('Research request not found');
+      const [sources, report] = await Promise.all([
+        listResearchSources(req.ctx.pool, request.id),
+        findResearchReport(req.ctx.pool, request.id),
+      ]);
+      res.json({ request, sources, report });
     }),
   );
 

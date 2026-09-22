@@ -133,6 +133,13 @@ export const DICTIONARY = {
     'dashboard.recent': 'Recent meetings',
     'dashboard.pendingTasks': 'Open tasks',
     'dashboard.pendingApprovals': 'Waiting for approval',
+    'nav.research': 'Research',
+    'research.ask': 'What should I research?',
+    'research.submit': 'Start research',
+    'research.sources': 'Sources',
+    'research.none': 'No research yet.',
+    'research.notConfigured': 'Research needs a web search provider and an LLM. Neither is faked.',
+    'research.retrieved': 'retrieved',
   },
   ar: {
     'app.name': 'ALIA للاجتماعات',
@@ -262,6 +269,13 @@ export const DICTIONARY = {
     'dashboard.recent': 'أحدث الاجتماعات',
     'dashboard.pendingTasks': 'مهام مفتوحة',
     'dashboard.pendingApprovals': 'بانتظار الموافقة',
+    'nav.research': 'البحث والتحليل',
+    'research.ask': 'ما الذي تريد البحث فيه؟',
+    'research.submit': 'ابدأ البحث',
+    'research.sources': 'المصادر',
+    'research.none': 'لا توجد أبحاث بعد.',
+    'research.notConfigured': 'البحث يحتاج مزوّد بحث ويب ونموذج لغوي. لا يتم تزييف أي منهما.',
+    'research.retrieved': 'تم الجلب',
   },
 } as const;
 

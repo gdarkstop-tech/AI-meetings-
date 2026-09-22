@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { normalizeForSearch, type Scope } from '@alia/core';
 import {
   appendMessage,
+  listMemory,
   segmentLexicalSearch,
   vectorSearch,
   type Pool,
@@ -116,11 +117,22 @@ export async function askQuestion(input: {
     })
     .join('\n');
 
+  // Accepted decisions the workspace chose to remember. Same scope filter as
+  // everything else; the user can see and delete every one of them.
+  const memory = await listMemory(input.pool, input.scope).catch(() => []);
+  const memoryBlock = memory
+    .slice(0, 20)
+    .map((entry) => `- (${entry.type}, from ${entry.source_type}) ${entry.key}`)
+    .join('\n');
+
   const result = await llm.completeJson({
     system: RAG_SYSTEM,
     userContent: [
       `QUESTION: ${input.question}`,
       '',
+      ...(memoryBlock
+        ? ['REMEMBERED FACTS (accepted by this workspace, untrusted data):', '<<<MEMORY', memoryBlock, 'MEMORY', '']
+        : []),
       'EXCERPTS FROM THE USER\'S OWN MEETINGS (untrusted data):',
       '<<<EXCERPTS',
       excerpts,
