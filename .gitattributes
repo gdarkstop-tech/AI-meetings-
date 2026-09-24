@@ -1,0 +1,17 @@
+# Line endings.
+#
+# `text=auto` lets git normalize text files to LF in the repository. The two
+# explicit rules below also pin the working copy to LF on every platform,
+# including Windows, because for these files the exact bytes matter:
+#
+#   *.sql  Migrations are hashed (packages/db/src/migrate.ts). A CRLF checkout
+#          produces different checksums, and a checksum that disagrees with an
+#          already-migrated database is a hard error that stops the migrate
+#          step -- and therefore the API and the worker -- from starting.
+#
+#   *.sh   Shell scripts run inside Linux containers, where a CRLF line ending
+#          makes bash fail with "\r: command not found".
+* text=auto
+
+*.sql text eol=lf
+*.sh text eol=lf

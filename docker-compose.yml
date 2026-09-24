@@ -46,6 +46,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
       NODE_ENV: production
       PORT: 4000
+      # Guarded like the storage variables: without it the containers would start
+      # and then crash-loop, with the real reason buried in the logs.
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env (openssl rand -base64 32)}
       STORAGE_PROVIDER: s3
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
       S3_REGION: ${S3_REGION:?set S3_REGION in .env}
@@ -80,6 +83,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-alia}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-alia}
       NODE_ENV: production
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY in .env (openssl rand -base64 32)}
       STORAGE_PROVIDER: s3
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
       S3_REGION: ${S3_REGION:?set S3_REGION in .env}
