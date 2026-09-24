@@ -331,11 +331,23 @@ export function meetingRoutes(config: Config): Router {
       const session = await findUploadSession(req.ctx.pool, scope, uploadId);
       if (!session) throw new NotFoundError('Upload session not found');
 
-      const expected = Math.ceil(Number(session.total_bytes) / session.chunk_size);
+      const totalBytes = Number(session.total_bytes);
+      const expected = Math.ceil(totalBytes / session.chunk_size);
       const missing: number[] = [];
       for (let i = 0; i < expected; i += 1) if (!session.received_chunks.includes(i)) missing.push(i);
       if (missing.length > 0) {
         throw new ValidationError(`Upload incomplete: ${missing.length} chunk(s) missing.`, { missing });
+      }
+      // The assembled object is streamed, so its length has to be known before the
+      // first byte is sent (S3 rejects a stream body without one). Every chunk is
+      // present by now, so a byte-count mismatch means the client announced a size
+      // it did not upload: refuse deterministically rather than store a short object.
+      const receivedBytes = Number(session.received_bytes);
+      if (receivedBytes !== totalBytes) {
+        throw new ValidationError(`Upload incomplete: ${receivedBytes} of ${totalBytes} bytes received.`, {
+          receivedBytes,
+          totalBytes,
+        });
       }
 
       const storage = req.ctx.registry.storage();
@@ -353,7 +365,7 @@ export function meetingRoutes(config: Config): Router {
       );
 
       const key = `${scope.workspaceId}/meetings/${meetingId}/original-${uploadId}`;
-      await storage.put({ key, body: assembled, contentType: session.mime_type });
+      await storage.put({ key, body: assembled, contentType: session.mime_type, bytes: totalBytes });
       await storage.deletePrefix(`${session.storage_prefix}/${uploadId}`);
 
       const media = await withTransaction(req.ctx.pool, async (client) => {

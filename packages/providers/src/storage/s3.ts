@@ -41,6 +41,16 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async put(input: { key: string; body: Buffer | Readable; contentType: string; bytes?: number }): Promise<StorageObject> {
+    // A stream body must carry its length. Without one the SDK switches to
+    // aws-chunked framing and then fails building the request, with an error that
+    // names an HTTP header rather than the caller's mistake. Every call site in
+    // this repository knows the length, so state the contract here instead.
+    if (!Buffer.isBuffer(input.body) && input.bytes === undefined) {
+      throw new Error(
+        `S3 put("${input.key}"): a stream body requires \`bytes\` (the exact content length). ` +
+          'Pass the known length, or supply a Buffer.',
+      );
+    }
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.config.bucket,

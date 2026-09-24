@@ -189,7 +189,7 @@ describe('S3 storage adapter (against a local S3-protocol server, not live S3)',
     expect(await storage.getBuffer('ws/meetings/m1/original')).toEqual(payload);
   });
 
-  it('uploads a stream (the assembled-upload path) without corrupting it', async () => {
+  it('uploads a stream whose length is known without corrupting it', async () => {
     const payload = Buffer.concat([Buffer.alloc(2048, 7), Buffer.alloc(1024, 9)]);
     await storage.put({
       key: 'ws/meetings/m1/streamed',
@@ -198,6 +198,59 @@ describe('S3 storage adapter (against a local S3-protocol server, not live S3)',
       bytes: payload.length,
     });
     expect(await storage.getBuffer('ws/meetings/m1/streamed')).toEqual(payload);
+  });
+
+  /**
+   * The shape the upload-finalise route actually uses: an async generator that
+   * yields chunks as it fetches them, with the total announced up front. An
+   * earlier version of this suite passed a plain array and called itself the
+   * assembled-upload path, which it was not.
+   */
+  it('uploads an async-generator stream, as the upload-finalise route does', async () => {
+    const parts = [Buffer.alloc(1024, 1), Buffer.alloc(1024, 2), Buffer.alloc(512, 3)];
+    const payload = Buffer.concat(parts);
+    const written = await storage.put({
+      key: 'ws/meetings/m1/assembled',
+      body: Readable.from(
+        (async function* () {
+          for (const part of parts) yield part;
+        })(),
+      ),
+      contentType: 'video/mp4',
+      bytes: payload.length,
+    });
+    expect(written.bytes).toBe(payload.length);
+    expect(await storage.getBuffer('ws/meetings/m1/assembled')).toEqual(payload);
+  });
+
+  /**
+   * Regression: a stream body with no length used to reach the AWS SDK, which
+   * failed while building the request ("Invalid value \"undefined\" for header
+   * x-amz-decoded-content-length") after switching to aws-chunked framing. The
+   * adapter now refuses it up front, and nothing is sent.
+   */
+  it('refuses a stream body with no byte count, before any request is made', async () => {
+    const before = requests.length;
+    await expect(
+      storage.put({
+        key: 'ws/meetings/m1/no-length',
+        body: Readable.from([Buffer.alloc(16, 1)]),
+        contentType: 'application/octet-stream',
+      }),
+    ).rejects.toThrow(/requires `bytes`/);
+    expect(requests.slice(before)).toEqual([]);
+    expect(await storage.head('ws/meetings/m1/no-length')).toBeNull();
+  });
+
+  it('still accepts a Buffer body with no byte count, whose length is intrinsic', async () => {
+    const payload = Buffer.alloc(256, 5);
+    const written = await storage.put({
+      key: 'ws/meetings/m1/buffer-no-length',
+      body: payload,
+      contentType: 'application/octet-stream',
+    });
+    expect(written.bytes).toBe(payload.length);
+    expect(await storage.getBuffer('ws/meetings/m1/buffer-no-length')).toEqual(payload);
   });
 
   it('serves byte ranges, which is what makes the player seekable', async () => {
