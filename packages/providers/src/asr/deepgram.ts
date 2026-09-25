@@ -1,5 +1,6 @@
 import { openAsBlob } from 'node:fs';
 import { z } from 'zod';
+import { ProviderCapabilityError } from '@alia/core';
 import type { TranscriptionProvider, TranscriptionResult, TranscriptSegmentDraft } from '../types.js';
 
 /**
@@ -51,6 +52,26 @@ const responseSchema = z.object({
   }),
 });
 
+/**
+ * Deepgram language parameter for a meeting's language hint.
+ *
+ * Verified against Deepgram's language table on 2026-09-24: Nova-3 supports
+ * Arabic only as a single language (`ar`, plus regional variants). Its
+ * code-switching mode, `language=multi`, covers en, es, fr, de, hi, ru, pt, ja,
+ * it and nl — not Arabic. Sending Arabic speech to `multi` would not produce an
+ * Arabic transcript, so a mixed Arabic/English meeting is refused here rather
+ * than silently transcribed as one language.
+ */
+export function deepgramLanguage(hint: 'ar' | 'en' | 'mixed'): 'ar' | 'en' {
+  if (hint === 'ar') return 'ar';
+  if (hint === 'en') return 'en';
+  throw new ProviderCapabilityError(
+    'asr',
+    'Deepgram cannot transcribe mixed Arabic/English audio: its multilingual mode does not include Arabic. ' +
+      'Use a speech-to-text provider that supports Arabic code-switching, or set the meeting language to Arabic or English.',
+  );
+}
+
 export interface DeepgramConfig {
   apiKey: string;
   model?: string;
@@ -71,8 +92,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     diarize: boolean;
     signal?: AbortSignal;
   }): Promise<TranscriptionResult> {
-    // nova-3 handles Arabic and code-switching through `language=multi`.
-    const language = input.languageHint === 'en' ? 'en' : 'multi';
+    const language = deepgramLanguage(input.languageHint);
     const params = new URLSearchParams({
       model: this.modelVersion,
       language,
@@ -144,8 +164,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       detectedLanguage: parsed.results.channels?.[0]?.detected_language,
       usage: {
         audioSeconds,
-        // Published pay-as-you-go rate for nova-3 multilingual, 2026-09-21.
-        costUsd: audioSeconds > 0 ? Number(((audioSeconds / 60) * 0.0052).toFixed(6)) : undefined,
+        // Published pay-as-you-go pre-recorded rate for Nova-3 monolingual,
+        // verified 2026-09-24. Only single-language modes are used (see above).
+        costUsd: audioSeconds > 0 ? Number(((audioSeconds / 60) * 0.0043).toFixed(6)) : undefined,
       },
     };
   }

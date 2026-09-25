@@ -4,8 +4,10 @@ import { Router, type Request, type Response } from 'express';
 import express from 'express';
 import { z } from 'zod';
 import {
+  AppError,
   ForbiddenError,
   NotFoundError,
+  ProviderNotConfiguredError,
   ValidationError,
   consentSatisfied,
   normalizeForSearch,
@@ -17,7 +19,9 @@ import {
   completeUploadSession,
   createMeeting,
   createUploadSession,
+  currentTranscriptVersion,
   enqueueJob,
+  findActivePipelineJob,
   findMedia,
   findMeeting,
   findUploadSession,
@@ -28,11 +32,14 @@ import {
   recordConsent,
   registerChunk,
   softDeleteMeeting,
+  startMeetingPipeline,
   transitionMeetingStatus,
   updateMeeting,
+  withExclusiveLock,
   withTransaction,
   workspaceSettings,
   writeAudit,
+  type ActivePipelineJob,
 } from '@alia/db';
 import { requirePermission } from '@alia/policy';
 import type { Config } from '../config.js';
@@ -65,6 +72,25 @@ const uploadInitSchema = z.object({
 const ALLOWED_MEDIA = /^(audio|video)\//;
 
 const scopeOf = (req: Request): Scope => req.ctx.scope as Scope;
+
+/**
+ * 409 for a meeting whose pipeline is already queued or running. Starting it
+ * again would pay for a second transcription and race the first.
+ */
+const PIPELINE_STAGE: Record<string, string> = {
+  'media.normalize': 'preparing',
+  'asr.transcribe': 'transcribing',
+  'analysis.run': 'analyzing',
+};
+
+function pipelineBusy(active: ActivePipelineJob): AppError {
+  return new AppError(
+    'CONFLICT',
+    'This meeting is already being processed. Wait for it to finish, then try again.',
+    409,
+    { stage: PIPELINE_STAGE[active.type] ?? 'processing', state: active.status },
+  );
+}
 
 export function meetingRoutes(config: Config): Router {
   const router = Router();
@@ -150,13 +176,17 @@ export function meetingRoutes(config: Config): Router {
       const meetingId = uuidSchema.parse(req.params.meetingId);
       const meeting = await findMeeting(req.ctx.pool, scope, meetingId);
       if (!meeting) throw new NotFoundError('Meeting not found');
-      const [media, speakers, chapters] = await Promise.all([
+      const [media, speakers, chapters, active] = await Promise.all([
         listMeetingMedia(req.ctx.pool, meetingId),
         listSpeakerMap(req.ctx.pool, meetingId),
         listChapters(req.ctx.pool, scope, meetingId),
+        findActivePipelineJob(req.ctx.pool, meetingId),
       ]);
       res.json({
         meeting,
+        // Whether processing is actually queued or running — what the reprocess
+        // guard checks — rather than inferred from the meeting's status.
+        processing: { active: active !== null, stage: active ? (PIPELINE_STAGE[active.type] ?? 'processing') : null },
         media: media.map((m) => ({
           kind: m.kind,
           mimeType: m.mime_type,
@@ -329,76 +359,112 @@ export function meetingRoutes(config: Config): Router {
       const meetingId = uuidSchema.parse(req.params.meetingId);
       const uploadId = uuidSchema.parse(req.params.uploadId);
       const session = await findUploadSession(req.ctx.pool, scope, uploadId);
-      if (!session) throw new NotFoundError('Upload session not found');
+      // The session must belong to the meeting in the URL: consent was checked
+      // for that meeting when the session was opened, and everything below
+      // (media row, status, processing) is keyed by this meetingId.
+      if (!session || session.meeting_id !== meetingId) throw new NotFoundError('Upload session not found');
 
-      const totalBytes = Number(session.total_bytes);
-      const expected = Math.ceil(totalBytes / session.chunk_size);
-      const missing: number[] = [];
-      for (let i = 0; i < expected; i += 1) if (!session.received_chunks.includes(i)) missing.push(i);
-      if (missing.length > 0) {
-        throw new ValidationError(`Upload incomplete: ${missing.length} chunk(s) missing.`, { missing });
-      }
-      // The assembled object is streamed, so its length has to be known before the
-      // first byte is sent (S3 rejects a stream body without one). Every chunk is
-      // present by now, so a byte-count mismatch means the client announced a size
-      // it did not upload: refuse deterministically rather than store a short object.
-      const receivedBytes = Number(session.received_bytes);
-      if (receivedBytes !== totalBytes) {
-        throw new ValidationError(`Upload incomplete: ${receivedBytes} of ${totalBytes} bytes received.`, {
-          receivedBytes,
-          totalBytes,
-        });
-      }
+      // One completion of an upload at a time, across API instances. Without
+      // this, simultaneous completions all assembled the same chunks; the first
+      // to commit deleted them and the rest failed mid-read with a 500 — and a
+      // half-written second copy could land on the stored object. The lock is
+      // taken only after the ownership check above, and never waits: a second
+      // request gets a 409 straight away.
+      const locked = await withExclusiveLock(req.ctx.pool, `upload-complete:${uploadId}`, async () => {
+        // Re-read under the lock: a completion may have finished just before.
+        const current = await findUploadSession(req.ctx.pool, scope, uploadId);
+        if (!current || current.meeting_id !== meetingId) throw new NotFoundError('Upload session not found');
+        if (current.status !== 'open') {
+          throw new AppError('CONFLICT', 'This upload has already been completed.', 409);
+        }
+        // Cheap early refusal before assembling anything; the authoritative,
+        // locked check happens again inside the transaction below.
+        const busy = await findActivePipelineJob(req.ctx.pool, meetingId);
+        if (busy) throw pipelineBusy(busy);
 
-      const storage = req.ctx.registry.storage();
-      const hash = createHash('sha256');
-      let bytes = 0;
-      const assembled = Readable.from(
-        (async function* () {
-          for (let i = 0; i < expected; i += 1) {
-            const chunk = await storage.getBuffer(`${session.storage_prefix}/${uploadId}/${i}`);
-            hash.update(chunk);
-            bytes += chunk.length;
-            yield chunk;
+        const totalBytes = Number(current.total_bytes);
+        const expected = Math.ceil(totalBytes / current.chunk_size);
+        const missing: number[] = [];
+        for (let i = 0; i < expected; i += 1) if (!current.received_chunks.includes(i)) missing.push(i);
+        if (missing.length > 0) {
+          throw new ValidationError(`Upload incomplete: ${missing.length} chunk(s) missing.`, { missing });
+        }
+        // The assembled object is streamed, so its length has to be known before the
+        // first byte is sent (S3 rejects a stream body without one). Every chunk is
+        // present by now, so a byte-count mismatch means the client announced a size
+        // it did not upload: refuse deterministically rather than store a short object.
+        const receivedBytes = Number(current.received_bytes);
+        if (receivedBytes !== totalBytes) {
+          throw new ValidationError(`Upload incomplete: ${receivedBytes} of ${totalBytes} bytes received.`, {
+            receivedBytes,
+            totalBytes,
+          });
+        }
+
+        const storage = req.ctx.registry.storage();
+        const hash = createHash('sha256');
+        let bytes = 0;
+        const assembled = Readable.from(
+          (async function* () {
+            for (let i = 0; i < expected; i += 1) {
+              const chunk = await storage.getBuffer(`${current.storage_prefix}/${uploadId}/${i}`);
+              hash.update(chunk);
+              bytes += chunk.length;
+              yield chunk;
+            }
+          })(),
+        );
+
+        const key = `${scope.workspaceId}/meetings/${meetingId}/original-${uploadId}`;
+        await storage.put({ key, body: assembled, contentType: current.mime_type, bytes: totalBytes });
+
+        const media = await withTransaction(req.ctx.pool, async (client) => {
+          // Locks the meeting and refuses if its pipeline is already queued or
+          // running, so two completions cannot both start processing.
+          const pipeline = await startMeetingPipeline(client, {
+            workspaceId: scope.workspaceId,
+            meetingId,
+            type: 'media.normalize',
+            maxAttempts: 3,
+          });
+          if ('notFound' in pipeline) throw new NotFoundError('Meeting not found');
+          if ('conflict' in pipeline) throw pipelineBusy(pipeline.conflict);
+          // Only one completion of a given upload can win this conditional update.
+          if (!(await completeUploadSession(client, uploadId))) {
+            throw new AppError('CONFLICT', 'This upload has already been completed.', 409);
           }
-        })(),
-      );
-
-      const key = `${scope.workspaceId}/meetings/${meetingId}/original-${uploadId}`;
-      await storage.put({ key, body: assembled, contentType: session.mime_type, bytes: totalBytes });
-      await storage.deletePrefix(`${session.storage_prefix}/${uploadId}`);
-
-      const media = await withTransaction(req.ctx.pool, async (client) => {
-        await completeUploadSession(client, uploadId);
-        const row = await addMeetingMedia(client, {
-          workspaceId: scope.workspaceId,
-          meetingId,
-          kind: 'original',
-          storageKey: key,
-          mimeType: session.mime_type,
-          bytes,
-          checksum: hash.digest('hex'),
+          const row = await addMeetingMedia(client, {
+            workspaceId: scope.workspaceId,
+            meetingId,
+            kind: 'original',
+            storageKey: key,
+            mimeType: current.mime_type,
+            bytes,
+            checksum: hash.digest('hex'),
+          });
+          await transitionMeetingStatus(client, meetingId, ['draft', 'recording', 'failed', 'uploaded'], 'uploaded');
+          await writeAudit(client, {
+            workspaceId: scope.workspaceId,
+            actorType: 'user',
+            actorId: scope.userId,
+            action: 'meeting.media.upload',
+            targetType: 'meeting',
+            targetId: meetingId,
+            payload: { bytes, mimeType: current.mime_type },
+            result: 'success',
+          });
+          return row;
         });
-        await transitionMeetingStatus(client, meetingId, ['draft', 'recording', 'failed', 'uploaded'], 'uploaded');
-        await writeAudit(client, {
-          workspaceId: scope.workspaceId,
-          actorType: 'user',
-          actorId: scope.userId,
-          action: 'meeting.media.upload',
-          targetType: 'meeting',
-          targetId: meetingId,
-          payload: { bytes, mimeType: session.mime_type },
-          result: 'success',
-        });
-        await enqueueJob(client, {
-          workspaceId: scope.workspaceId,
-          type: 'media.normalize',
-          payload: { meetingId },
-          maxAttempts: 3,
-        });
-        return row;
+        // Only once the completion is committed: a refused completion keeps its
+        // chunks, so the upload can still be completed later.
+        await storage.deletePrefix(`${current.storage_prefix}/${uploadId}`);
+        return media;
       });
+      if (!locked.acquired) {
+        throw new AppError('CONFLICT', 'This upload is already being completed.', 409);
+      }
 
+      const media = locked.value;
       res.status(201).json({
         media: { bytes: Number(media.bytes), checksum: media.checksum_sha256, storedAs: media.kind },
         processing: 'queued',
@@ -468,15 +534,34 @@ export function meetingRoutes(config: Config): Router {
         z.object({ stage: z.enum(['transcribe', 'analyze']).default('transcribe') }),
         req.body ?? {},
       );
+
+      // Refuse, before touching the meeting, work that cannot possibly succeed:
+      // queued anyway, it would only fail and mark a good meeting failed.
+      if (stage.stage === 'transcribe') {
+        if (!req.ctx.registry.isConfigured('asr')) throw new ProviderNotConfiguredError('asr');
+        if (!(await findMedia(req.ctx.pool, scope, meetingId, 'original'))) {
+          throw new AppError('CONFLICT', 'There is no recording to transcribe yet.', 409);
+        }
+      }
+      if (stage.stage === 'analyze') {
+        if (!req.ctx.registry.isConfigured('llm')) throw new ProviderNotConfiguredError('llm');
+        if (!(await currentTranscriptVersion(req.ctx.pool, meetingId))) {
+          throw new AppError('CONFLICT', 'There is no transcript to analyse yet.', 409);
+        }
+      }
+
       const jobType = stage.stage === 'analyze' ? 'analysis.run' : 'media.normalize';
       await withTransaction(req.ctx.pool, async (client) => {
-        await transitionMeetingStatus(client, meetingId, ['ready', 'failed', 'uploaded', 'processing'], 'processing');
-        await enqueueJob(client, {
+        // Locks the meeting and refuses while its pipeline is queued or running.
+        const pipeline = await startMeetingPipeline(client, {
           workspaceId: scope.workspaceId,
+          meetingId,
           type: jobType,
-          payload: { meetingId },
           maxAttempts: 3,
         });
+        if ('notFound' in pipeline) throw new NotFoundError('Meeting not found');
+        if ('conflict' in pipeline) throw pipelineBusy(pipeline.conflict);
+        await transitionMeetingStatus(client, meetingId, ['ready', 'failed', 'uploaded', 'processing'], 'processing');
         await writeAudit(client, {
           workspaceId: scope.workspaceId,
           actorType: 'user',

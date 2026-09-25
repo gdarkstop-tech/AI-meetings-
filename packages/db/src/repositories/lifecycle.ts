@@ -75,6 +75,20 @@ export async function costSummary(db: Queryable, scope: Scope, days = 30): Promi
 }
 
 /** Audio minutes consumed this calendar month, for the workspace quota. */
+/**
+ * Whether `jobId` has already recorded a successful `providerKind` call. The
+ * success record is written in the same transaction as the call's results, so
+ * `true` means the paid work for this job is done and stored: a re-run of the
+ * job (after a crash and lease recovery) must reuse it, not call again.
+ */
+export async function hasSuccessfulProviderCall(db: Queryable, jobId: string, providerKind: string): Promise<boolean> {
+  const { rows } = await db.query(
+    `SELECT 1 FROM provider_calls WHERE job_id = $1 AND provider_kind = $2 AND outcome = 'success' LIMIT 1`,
+    [jobId, providerKind],
+  );
+  return rows.length > 0;
+}
+
 export async function audioMinutesThisMonth(db: Queryable, workspaceId: string): Promise<number> {
   const { rows } = await db.query<{ minutes: string }>(
     `SELECT COALESCE(sum(audio_seconds) / 60.0, 0)::text AS minutes

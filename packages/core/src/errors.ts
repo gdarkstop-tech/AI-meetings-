@@ -84,6 +84,20 @@ export class ProviderNotConfiguredError extends AppError {
   }
 }
 
+/**
+ * A provider is configured but cannot handle this particular input at all, for
+ * example a language it does not support. Retrying cannot succeed, so work that
+ * hits this is failed once, clearly, instead of being retried or degraded.
+ */
+export class ProviderCapabilityError extends AppError {
+  constructor(
+    public readonly providerKind: string,
+    message: string,
+  ) {
+    super('PROVIDER_ERROR', message, 422, { providerKind });
+  }
+}
+
 export class NotImplementedError extends AppError {
   constructor(what: string) {
     super('NOT_IMPLEMENTED', `${what} is not implemented yet.`, 501, { what });

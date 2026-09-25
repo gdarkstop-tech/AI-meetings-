@@ -16,6 +16,8 @@ export function MeetingDetail({ id, locale, timezone }: { id: string; locale: Lo
   const [visible, setVisible] = useState(VISIBLE_STEP);
   const [error, setError] = useState<string | null>(null);
   const [followUp, setFollowUp] = useState<{ subject: string; body: string; note?: string } | null>(null);
+  // Which reprocess request is in flight, so a double click cannot send two.
+  const [reprocessing, setReprocessing] = useState<'transcribe' | 'analyze' | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const load = () => {
@@ -24,6 +26,24 @@ export function MeetingDetail({ id, locale, timezone }: { id: string; locale: Lo
     void api.insights(id).then(setInsights).catch(() => undefined);
   };
   useEffect(load, [id]);
+
+  const reprocess = async (stage: 'transcribe' | 'analyze') => {
+    if (reprocessing) return;
+    const question = stage === 'transcribe' ? t('meetings.retranscribe.confirm') : t('meetings.reprocess.confirm');
+    if (!window.confirm(question)) return;
+    setReprocessing(stage);
+    setError(null);
+    try {
+      await api.reprocess(id, stage);
+      load();
+    } catch (err) {
+      // The server is the real guard (409 while processing, 503 when the
+      // provider is not configured); say what it said instead of failing silently.
+      setError(err instanceof ApiRequestError ? err.error.message : t('error.generic'));
+    } finally {
+      setReprocessing(null);
+    }
+  };
 
   const seek = (ms: number) => {
     const audio = audioRef.current;
@@ -46,6 +66,12 @@ export function MeetingDetail({ id, locale, timezone }: { id: string; locale: Lo
 
   if (!detail) return <section className="card"><p className="hint">{error ?? t('common.loading')}</p></section>;
   const meeting = detail.meeting;
+  // While processing is queued or running the server refuses to start it
+  // again; disabling the buttons just avoids the round trip. This is the
+  // server's own answer, not a guess from the status, so a meeting left
+  // "processing" by an earlier failure can still be started again.
+  const pipelineActive = detail.processing.active;
+  const reprocessBlocked = pipelineActive || reprocessing !== null;
 
   return (
     <>
@@ -66,15 +92,26 @@ export function MeetingDetail({ id, locale, timezone }: { id: string; locale: Lo
           </span>
         </div>
         {meeting.failure_reason && <p className="error">{meeting.failure_reason}</p>}
+        {error && <p className="error">{error}</p>}
         {!meeting.consent_obtained && <p className="error">{t('meetings.consent.required')}</p>}
         {detail.media.length > 0 && (
           <audio ref={audioRef} controls preload="metadata" src={`/api/v1/meetings/${id}/media`} style={{ width: '100%', marginTop: 12 }} />
         )}
         <div className="topbar-actions" style={{ marginTop: 12 }}>
-          <button type="button" onClick={() => void api.reprocess(id, 'transcribe').then(load).catch(() => undefined)}>
+          <button
+            type="button"
+            disabled={reprocessBlocked}
+            title={pipelineActive ? t('meetings.pipeline.busy') : undefined}
+            onClick={() => void reprocess('transcribe')}
+          >
             {t('meetings.retranscribe')}
           </button>
-          <button type="button" onClick={() => void api.reprocess(id, 'analyze').then(load).catch(() => undefined)}>
+          <button
+            type="button"
+            disabled={reprocessBlocked}
+            title={pipelineActive ? t('meetings.pipeline.busy') : undefined}
+            onClick={() => void reprocess('analyze')}
+          >
             {t('meetings.reprocess')}
           </button>
           <button

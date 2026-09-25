@@ -76,7 +76,17 @@ services:
   # meeting you expect to process.
   worker:
     build: .
-    command: npm run start:worker
+    # Started directly rather than through `npm run start:worker`: npm runs
+    # scripts via `sh -c`, which does not pass SIGTERM on, so the worker was
+    # killed mid-job on every stop or restart instead of finishing its job
+    # (apps/worker/src/index.ts). tini (the image entrypoint) forwards the
+    # signal to this node process.
+    command: ['node', '--import', 'tsx', 'apps/worker/src/index.ts']
+    # How long Docker waits after SIGTERM before killing the worker. Must exceed
+    # WORKER_SHUTDOWN_GRACE_MS (default 120 s) plus the 5 s an interrupted job
+    # gets to stop, with margin. Docker's default of 10 s would cut every
+    # graceful shutdown short.
+    stop_grace_period: 150s
     env_file:
       - path: .env
         required: false

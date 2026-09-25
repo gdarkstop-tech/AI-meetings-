@@ -152,6 +152,7 @@ export const api = {
   meeting: (id: string) =>
     call<{
       meeting: Meeting;
+      processing: { active: boolean; stage: string | null };
       media: Array<{ kind: string; mimeType: string; bytes: number; durationMs: number | null }>;
       speakers: Array<{ speaker_label: string; person_id: string; display_name: string }>;
       chapters: Array<{ id: string; title: string; start_ms: number; end_ms: number }>;

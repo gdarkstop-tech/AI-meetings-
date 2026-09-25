@@ -5,6 +5,7 @@ export * from './repositories/workspaces.js';
 export * from './repositories/sessions.js';
 export * from './repositories/audit.js';
 export * from './repositories/jobs.js';
+export * from './repositories/pipeline.js';
 export * from './repositories/meetings.js';
 export * from './repositories/transcripts.js';
 export * from './repositories/insights.js';

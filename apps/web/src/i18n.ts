@@ -79,6 +79,11 @@ export const DICTIONARY = {
     'meetings.empty': 'No meetings yet. Create one to get started.',
     'meetings.reprocess': 'Re-run analysis',
     'meetings.retranscribe': 'Re-transcribe',
+    'meetings.retranscribe.confirm':
+      'Transcribe this recording again? The new transcript replaces the current one, and the speech-to-text provider may charge for it.',
+    'meetings.reprocess.confirm':
+      'Run the AI analysis again? The new summary replaces the current one, and the AI provider may charge for it.',
+    'meetings.pipeline.busy': 'Processing is in progress. Wait for it to finish before starting it again.',
     'meetings.delete.confirm': 'Delete this meeting and erase its recording, transcript and AI output?',
     'meeting.transcript': 'Transcript',
     'meeting.summary': 'Summary',
@@ -215,6 +220,11 @@ export const DICTIONARY = {
     'meetings.empty': 'لا توجد اجتماعات بعد. أنشئ واحداً للبدء.',
     'meetings.reprocess': 'إعادة التحليل',
     'meetings.retranscribe': 'إعادة التفريغ',
+    'meetings.retranscribe.confirm':
+      'هل تريد تفريغ هذا التسجيل مرة أخرى؟ سيحلّ التفريغ الجديد محل الحالي، وقد تفرض خدمة تحويل الكلام إلى نص رسوماً على ذلك.',
+    'meetings.reprocess.confirm':
+      'هل تريد إعادة التحليل بالذكاء الاصطناعي؟ سيحلّ الملخص الجديد محل الحالي، وقد تفرض خدمة الذكاء الاصطناعي رسوماً على ذلك.',
+    'meetings.pipeline.busy': 'المعالجة جارية. انتظر حتى تنتهي قبل تشغيلها مرة أخرى.',
     'meetings.delete.confirm': 'حذف هذا الاجتماع ومسح التسجيل والتفريغ ومخرجات الـ AI؟',
     'meeting.transcript': 'التفريغ',
     'meeting.summary': 'الملخص',

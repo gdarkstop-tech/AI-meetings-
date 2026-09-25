@@ -5,9 +5,11 @@ import {
   audioMinutesThisMonth,
   createTranscriptVersion,
   currentTranscriptVersion,
+  enqueueFollowUpJob,
   enqueueJob,
   findMeetingUnscoped,
   findMedia,
+  hasSuccessfulProviderCall,
   insertActionItems,
   insertDecisions,
   insertSegments,
@@ -31,21 +33,43 @@ import {
 import { analyzeTranscript } from './analysis.js';
 import { executeAction } from './gateway.js';
 import { runResearch } from './research.js';
+import { PipelineStepError } from './failures.js';
 import { normalizeToSpeechAudio, withTempDir } from './media.js';
 import type { PipelineContext } from './context.js';
 
-export type JobHandler = (ctx: PipelineContext, job: JobRow) => Promise<Record<string, unknown>>;
+/**
+ * `signal` is aborted when the worker loses the job's lease (the job was
+ * recovered and may be running elsewhere): long provider calls stop instead of
+ * finishing work nobody will record.
+ */
+export type JobHandler = (
+  ctx: PipelineContext,
+  job: JobRow,
+  run?: { signal?: AbortSignal },
+) => Promise<Record<string, unknown>>;
+
+/**
+ * Stop before writing anything once this run has been told to stop: its lease
+ * was lost (another run may own the job now), or the worker is shutting down.
+ * A lost lease's outcome is already fenced out (runner.ts); this also keeps its
+ * side effects — status changes, follow-up jobs, stored results — from landing
+ * late. The throw is handled by the runner (discarded, or the job is released
+ * for shutdown) and is never shown to a user.
+ */
+function stopIfAborted(run?: { signal?: AbortSignal }): void {
+  if (run?.signal?.aborted) throw new Error('This run was told to stop; it writes nothing more.');
+}
 
 const scopeless = (workspaceId: string) => ({ workspaceId, userId: '00000000-0000-0000-0000-000000000000', role: 'owner' as const });
 
 /** 1. Normalize uploaded media to mono 16 kHz speech audio with real ffmpeg. */
-export const mediaNormalize: JobHandler = async (ctx, job) => {
+export const mediaNormalize: JobHandler = async (ctx, job, run) => {
   const meetingId = String(job.payload.meetingId);
   const meeting = await findMeetingUnscoped(ctx.pool, meetingId);
-  if (!meeting) throw new Error(`Meeting ${meetingId} not found`);
+  if (!meeting) throw new PipelineStepError('MEETING_NOT_FOUND', 'The meeting no longer exists.');
 
   const original = await findMedia(ctx.pool, scopeless(meeting.workspace_id), meetingId, 'original');
-  if (!original) throw new Error('No original media to normalize');
+  if (!original) throw new PipelineStepError('MEDIA_MISSING', 'The meeting has no recording to process.');
 
   const storage = ctx.registry.storage();
   const result = await withTempDir(async (dir) => {
@@ -67,10 +91,12 @@ export const mediaNormalize: JobHandler = async (ctx, job) => {
     return normalized;
   });
 
+  stopIfAborted(run);
   await transitionMeetingStatus(ctx.pool, meetingId, ['uploaded', 'processing', 'failed'], 'processing', {
     durationMs: result.durationMs,
   });
-  await enqueueJob(ctx.pool, {
+  // At most once per normalize job, even if this job is re-run after a crash.
+  await enqueueFollowUpJob(ctx.pool, job.id, {
     workspaceId: meeting.workspace_id,
     type: 'asr.transcribe',
     payload: { meetingId },
@@ -80,27 +106,39 @@ export const mediaNormalize: JobHandler = async (ctx, job) => {
 };
 
 /** 2. Transcribe with the configured ASR provider. No provider, no transcript. */
-export const asrTranscribe: JobHandler = async (ctx, job) => {
+export const asrTranscribe: JobHandler = async (ctx, job, run) => {
   const meetingId = String(job.payload.meetingId);
   const meeting = await findMeetingUnscoped(ctx.pool, meetingId);
-  if (!meeting) throw new Error(`Meeting ${meetingId} not found`);
+  if (!meeting) throw new PipelineStepError('MEETING_NOT_FOUND', 'The meeting no longer exists.');
+  const settings = await workspaceSettings(ctx.pool, meeting.workspace_id);
+
+  // This job already paid for and stored its transcript: it is being re-run
+  // after a crash (lease recovery). Do not call the provider again — finish the
+  // steps that follow the transcript, which are themselves idempotent.
+  if (await hasSuccessfulProviderCall(ctx.pool, job.id, 'asr')) {
+    const existing = await currentTranscriptVersion(ctx.pool, meetingId);
+    if (existing) {
+      await afterTranscript(ctx, job, meeting.workspace_id, meetingId, existing.id, settings?.ai_enabled ?? false);
+      return { segments: existing.segment_count, provider: existing.provider_id, versionId: existing.id, reused: true };
+    }
+  }
 
   // Resolve the provider first: with none configured this throws
   // ProviderNotConfiguredError immediately instead of doing pointless work.
   const provider = ctx.registry.asr();
 
-  const settings = await workspaceSettings(ctx.pool, meeting.workspace_id);
   const usedMinutes = await audioMinutesThisMonth(ctx.pool, meeting.workspace_id);
   if (settings && usedMinutes >= settings.monthly_audio_minutes_quota) {
-    throw new Error(
-      `Workspace audio quota exhausted (${Math.round(usedMinutes)} of ${settings.monthly_audio_minutes_quota} minutes this month).`,
+    throw new PipelineStepError(
+      'AUDIO_QUOTA_EXCEEDED',
+      `This workspace has used its monthly audio allowance (${settings.monthly_audio_minutes_quota} minutes).`,
     );
   }
 
   const media =
     (await findMedia(ctx.pool, scopeless(meeting.workspace_id), meetingId, 'normalized')) ??
     (await findMedia(ctx.pool, scopeless(meeting.workspace_id), meetingId, 'original'));
-  if (!media) throw new Error('No media available to transcribe');
+  if (!media) throw new PipelineStepError('MEDIA_MISSING', 'The meeting has no recording to transcribe.');
 
   const storage = ctx.registry.storage();
   const started = Date.now();
@@ -114,13 +152,22 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
         mimeType: media.mime_type,
         languageHint: meeting.language,
         diarize: true,
+        signal: run?.signal,
       });
     });
 
+    // Deliberately no stopIfAborted here. The call has been paid for; storing
+    // its transcript (with its success record) lets whichever run now owns the
+    // job reuse it instead of paying again. Transcripts are versioned, so the
+    // worst case of a late write is a superseded version, not duplicated output.
     if (result.segments.length === 0) {
-      throw new Error('The transcription provider returned no speech segments.');
+      // The call succeeded (and was billed); retrying the same audio would only
+      // pay again for the same empty answer.
+      throw new PipelineStepError('NO_SPEECH_DETECTED', 'No speech was detected in the recording.');
     }
 
+    // The transcript and the record of the successful call commit together, so
+    // "this job's paid work is done" is never true without its result stored.
     const versionId = await withTransaction(ctx.pool, async (client) => {
       const version = await createTranscriptVersion(client, {
         workspaceId: meeting.workspace_id,
@@ -129,6 +176,7 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
         modelVersion: result.modelVersion,
         languageHint: meeting.language,
         stats: {
+          jobId: job.id,
           detectedLanguage: result.detectedLanguage ?? null,
           audioSeconds: result.usage.audioSeconds,
           diarizedSpeakers: new Set(result.segments.map((s) => s.speaker)).size,
@@ -149,6 +197,19 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
           language: segment.language ?? null,
         })),
       });
+      await recordProviderCall(client, {
+        workspaceId: meeting.workspace_id,
+        jobId: job.id,
+        meetingId,
+        providerKind: 'asr',
+        providerId: result.providerId,
+        modelVersion: result.modelVersion,
+        operation: 'transcribe',
+        latencyMs: Date.now() - started,
+        audioSeconds: result.usage.audioSeconds,
+        costUsd: result.usage.costUsd ?? null,
+        outcome: 'success',
+      });
       await writeAudit(client, {
         workspaceId: meeting.workspace_id,
         actorType: 'system',
@@ -162,37 +223,7 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
       return version.id;
     });
 
-    await recordProviderCall(ctx.pool, {
-      workspaceId: meeting.workspace_id,
-      jobId: job.id,
-      meetingId,
-      providerKind: 'asr',
-      providerId: result.providerId,
-      modelVersion: result.modelVersion,
-      operation: 'transcribe',
-      latencyMs: Date.now() - started,
-      audioSeconds: result.usage.audioSeconds,
-      costUsd: result.usage.costUsd ?? null,
-      outcome: 'success',
-    });
-
-    if (ctx.registry.isConfigured('embeddings')) {
-      await enqueueJob(ctx.pool, {
-        workspaceId: meeting.workspace_id,
-        type: 'transcript.embed',
-        payload: { meetingId, versionId },
-      });
-    }
-    if (settings?.ai_enabled && ctx.registry.isConfigured('llm')) {
-      await enqueueJob(ctx.pool, {
-        workspaceId: meeting.workspace_id,
-        type: 'analysis.run',
-        payload: { meetingId },
-        maxAttempts: 2,
-      });
-    } else {
-      await transitionMeetingStatus(ctx.pool, meetingId, ['processing'], 'ready');
-    }
+    await afterTranscript(ctx, job, meeting.workspace_id, meetingId, versionId, settings?.ai_enabled ?? false);
     return { segments: result.segments.length, provider: result.providerId, versionId };
   } catch (error) {
     await recordProviderCall(ctx.pool, {
@@ -209,6 +240,34 @@ export const asrTranscribe: JobHandler = async (ctx, job) => {
     throw error;
   }
 };
+
+/** Queue what follows a stored transcript. Safe to repeat for the same job. */
+async function afterTranscript(
+  ctx: PipelineContext,
+  job: JobRow,
+  workspaceId: string,
+  meetingId: string,
+  versionId: string,
+  aiEnabled: boolean,
+): Promise<void> {
+  if (ctx.registry.isConfigured('embeddings')) {
+    await enqueueFollowUpJob(ctx.pool, job.id, {
+      workspaceId,
+      type: 'transcript.embed',
+      payload: { meetingId, versionId },
+    });
+  }
+  if (aiEnabled && ctx.registry.isConfigured('llm')) {
+    await enqueueFollowUpJob(ctx.pool, job.id, {
+      workspaceId,
+      type: 'analysis.run',
+      payload: { meetingId },
+      maxAttempts: 2,
+    });
+  } else {
+    await transitionMeetingStatus(ctx.pool, meetingId, ['processing'], 'ready');
+  }
+}
 
 /** 3. Embed segments for semantic search. Partial failure degrades search, not truth. */
 export const transcriptEmbed: JobHandler = async (ctx, job) => {
@@ -246,15 +305,22 @@ export const transcriptEmbed: JobHandler = async (ctx, job) => {
 };
 
 /** 4. Summaries, decisions, action items and chapters — all evidence-validated. */
-export const analysisRun: JobHandler = async (ctx, job) => {
+export const analysisRun: JobHandler = async (ctx, job, run) => {
   const meetingId = String(job.payload.meetingId);
   const meeting = await findMeetingUnscoped(ctx.pool, meetingId);
-  if (!meeting) throw new Error(`Meeting ${meetingId} not found`);
+  if (!meeting) throw new PipelineStepError('MEETING_NOT_FOUND', 'The meeting no longer exists.');
+
+  // Already analysed and stored by an earlier run of this same job (re-run
+  // after a crash): do not pay for the analysis again.
+  if (await hasSuccessfulProviderCall(ctx.pool, job.id, 'llm')) {
+    await transitionMeetingStatus(ctx.pool, meetingId, ['processing', 'ready'], 'ready');
+    return { reused: true };
+  }
 
   const version = await currentTranscriptVersion(ctx.pool, meetingId);
-  if (!version) throw new Error('No transcript to analyse');
+  if (!version) throw new PipelineStepError('NO_TRANSCRIPT', 'There is no transcript to analyse yet.');
   const segments = await listSegmentsForPipeline(ctx.pool, version.id);
-  if (segments.length === 0) throw new Error('Transcript has no segments');
+  if (segments.length === 0) throw new PipelineStepError('NO_TRANSCRIPT', 'The transcript has no segments to analyse.');
 
   const llm = ctx.registry.llm();
   const started = Date.now();
@@ -277,6 +343,10 @@ export const analysisRun: JobHandler = async (ctx, job) => {
       outputLanguage,
     });
 
+    // Unlike a transcript, decisions and action items are inserted, not
+    // versioned: a late write from a run that lost its lease would duplicate
+    // what users see, so it stops here instead.
+    stopIfAborted(run);
     await withTransaction(ctx.pool, async (client) => {
       const common = {
         workspaceId: meeting.workspace_id,
@@ -330,21 +400,21 @@ export const analysisRun: JobHandler = async (ctx, job) => {
             ? `Transcript contained ${outcome.report.suspiciousContent.length} instruction-like passage(s); reported, not executed.`
             : null,
       });
-    });
-
-    await recordProviderCall(ctx.pool, {
-      workspaceId: meeting.workspace_id,
-      jobId: job.id,
-      meetingId,
-      providerKind: 'llm',
-      providerId: llm.id,
-      modelVersion: outcome.report.modelVersion,
-      operation: 'analysis',
-      latencyMs: Date.now() - started,
-      inputTokens: outcome.report.usage.inputTokens,
-      outputTokens: outcome.report.usage.outputTokens,
-      costUsd: outcome.report.usage.costUsd,
-      outcome: 'success',
+      // Committed with the results it paid for (see hasSuccessfulProviderCall).
+      await recordProviderCall(client, {
+        workspaceId: meeting.workspace_id,
+        jobId: job.id,
+        meetingId,
+        providerKind: 'llm',
+        providerId: llm.id,
+        modelVersion: outcome.report.modelVersion,
+        operation: 'analysis',
+        latencyMs: Date.now() - started,
+        inputTokens: outcome.report.usage.inputTokens,
+        outputTokens: outcome.report.usage.outputTokens,
+        costUsd: outcome.report.usage.costUsd,
+        outcome: 'success',
+      });
     });
 
     await transitionMeetingStatus(ctx.pool, meetingId, ['processing', 'ready'], 'ready');
